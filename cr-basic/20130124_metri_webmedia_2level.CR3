@@ -1,0 +1,681 @@
+'CNR1 signal(S/N: 080090 Since 2009, Sensitivity = 12.74)
+'CM3 up   red - SE1 , blue - SE2
+'CM3 dn   white - SE3, black - SE4
+'CG3 up  grey - SE5, yellow - SE6
+'CG3 dn  brown - SE7, green - SE8
+'
+'CNR1 PRT100 temperature sensor
+'red - IX1
+'blue - IXR
+'yellow - SE9
+'green - SE10
+
+'CNR1 heater
+'black - 12V
+'white - G
+
+Public WS_ms
+Public WindDir
+Public Rain_mm
+
+Units WS_ms=meters/second
+Units WindDir=Degrees
+Units Rain_mm=mm
+
+'CR3000 Series Datalogger
+Const ANGLE_FROM_NORTH = -90
+Const SCAN_INTERVAL = 100
+Const OUTPUT_INTERVAL = 30
+Const CSAT_OPT = INT (1/SCAN_INTERVAL * 1000)
+Const ANALOG_DELAY = INT (300/SCAN_INTERVAL + 1)
+Const CSAT_DELAY = INT (ANALOG_DELAY - 2)
+Const rho_a = 1.2
+Const CP = 1004.67
+Const LV = 2440
+Const SDM_PER = 100
+Const A_0 = 6.107799961
+Const A_1 = 4.436518521e-1
+Const A_2 = 1.428945805e-2
+Const A_3 = 2.650648471e-4
+Const A_4 = 3.031240396e-6
+Const A_5 = 2.034080948e-8
+Const A_6 = 6.136820929e-11
+Const YES = -1
+Const NO = 0
+Public wind(2,5)
+Alias wind(1,1) = Ux_1
+Alias wind(1,2) = Uy_1
+Alias wind(1,3) = Uz_1
+Alias wind(1,4) = Ts_1
+Alias wind(1,5) = diag_csat_1
+Alias wind(2,1) = Ux_2
+Alias wind(2,2) = Uy_2
+Alias wind(2,3) = Uz_2
+Alias wind(2,4) = Ts_2
+Alias wind(2,5) = diag_csat_2
+Units wind = m/s
+Units Ts_1 = C
+Units Ts_2 = C
+Units diag_csat_1 = unitless
+Units diag_csat_2 = unitless
+Public irga(2,4)
+Alias irga(1,1) = co2_1
+Alias irga(1,2) = h2o_1
+Alias irga(1,3) = press_1
+Alias irga(1,4) = diag_irga_1
+Alias irga(2,1) = co2_2
+Alias irga(2,2) = h2o_2
+Alias irga(2,3) = press_2
+Alias irga(2,4) = diag_irga_2
+Units co2_1 = mg/(m^3)
+Units co2_2 = mg/(m^3)
+Units h2o_1 = g/(m^3)
+Units h2o_2 = g/(m^3)
+Units press_1 = kPa
+Units press_2 = kPa
+Units diag_irga_1 = unitless
+Units diag_irga_2 = unitless
+Public diag_bits(2,9)
+Alias diag_bits(1,1) = del_T_f_1
+Alias diag_bits(1,2) = track_f_1
+Alias diag_bits(1,3) = amp_h_f_1
+Alias diag_bits(1,4) = amp_l_f_1
+Alias diag_bits(1,5) = chopper_f_1
+Alias diag_bits(1,6) = detector_f_1
+Alias diag_bits(1,7) = pll_f_1
+Alias diag_bits(1,8) = sync_f_1
+Alias diag_bits(1,9) = agc_1
+Alias diag_bits(2,1) = del_T_f_2
+Alias diag_bits(2,2) = track_f_2
+Alias diag_bits(2,3) = amp_h_f_2
+Alias diag_bits(2,4) = amp_l_f_2
+Alias diag_bits(2,5) = chopper_f_2
+Alias diag_bits(2,6) = detector_f_2
+Alias diag_bits(2,7) = pll_f_2
+Alias diag_bits(2,8) = sync_f_2
+Alias diag_bits(2,9) = agc_2
+Units diag_bits = unitless
+Public tc_ref
+Units tc_ref = C
+Public hmp(2)
+Alias  hmp(1) = t_hmp_10m
+Alias  hmp(2) = rh_hmp_10m
+
+Public t_hmp_3m
+Public rh_hmp_3m
+
+'Public e_hmp				'HMP45C vapor pressure.
+'Dim h2o_hmp_mean			'Mean HMP45C vapor density.
+'Dim rho_a_mean				'Mean air density.
+
+
+'Alias  hmp(3) = t_hmp_5m
+'Alias  hmp(4) = rh_hmp_5m
+'Alias  hmp(5) = t_hmp_2m
+'Alias  hmp(6) = rh_hmp_2m
+'Alias  hmp(7) = t_hmp_1m
+'Alias  hmp(8) = rh_hmp_1m
+Public WS_slw_10m
+Public WS_slw(4)
+Alias  WS_slw(1) = WS_slw_1m
+Alias  WS_slw(2) = WS_slw_2m
+Alias  WS_slw(3) = WS_slw_5m
+Alias  WS_slw(4) = WS_slw_7m
+Public WD_slw_10m
+Units t_hmp_10m = degC
+Units rh_hmp_10m = fraction
+'Units t_hmp_5m = degC
+'Units rh_hmp_5m = fraction
+'Units t_hmp_2m = degC
+'Units rh_hmp_2m = fraction
+'Units t_hmp_1m = degC
+'Units rh_hmp_1m = fraction
+Units WS_slw_10m = m/s
+Units WD_slw_10m = deg
+Units WS_slw = m/s
+
+Public Fc_irga(2,1)
+Public LE_irga(2,1)
+Public Hs(2,1)
+Public tau(2,1)
+Public u_star(2,1)
+Public cov_out(2,44)
+Units Fc_irga = mg/(m^2 s)
+Units LE_irga = W/m^2
+Units Hs = W/m^2
+Units tau = kg m/s^2
+Units u_star = m/s
+Alias cov_out(1,1) = cv_Uz_Uz_1
+Alias cov_out(1,2) = cv_Uz_Ux_1
+Alias cov_out(1,3) = cv_Uz_Uy_1
+Alias cov_out(1,4) = cv_Uz_co2_1
+Alias cov_out(1,5) = cv_Uz_h2o_1
+Alias cov_out(1,7) = cv_Uz_Ts_1
+Alias cov_out(1,9) = cv_Ux_Ux_1
+Alias cov_out(1,10) = cv_Ux_Uy_1
+Alias cov_out(1,11) = cv_Ux_co2_1
+Alias cov_out(1,12) = cv_Ux_h2o_1
+Alias cov_out(1,14) = cv_Ux_Ts_1
+Alias cov_out(1,16) = cv_Uy_Uy_1
+Alias cov_out(1,17) = cv_Uy_co2_1
+Alias cov_out(1,18) = cv_Uy_h2o_1
+Alias cov_out(1,20) = cv_Uy_Ts_1
+Alias cov_out(1,22) = cv_co2_co2_1
+Alias cov_out(1,27) = cv_h2o_h2o_1
+Alias cov_out(1,34) = cv_Ts_Ts_1
+Alias cov_out(2,1) = cv_Uz_Uz_2
+Alias cov_out(2,2) = cv_Uz_Ux_2
+Alias cov_out(2,3) = cv_Uz_Uy_2
+Alias cov_out(2,4) = cv_Uz_co2_2
+Alias cov_out(2,5) = cv_Uz_h2o_2
+Alias cov_out(2,7) = cv_Uz_Ts_2
+Alias cov_out(2,9) = cv_Ux_Ux_2
+Alias cov_out(2,10) = cv_Ux_Uy_2
+Alias cov_out(2,11) = cv_Ux_co2_2
+Alias cov_out(2,12) = cv_Ux_h2o_2
+Alias cov_out(2,14) = cv_Ux_Ts_2
+Alias cov_out(2,16) = cv_Uy_Uy_2
+Alias cov_out(2,17) = cv_Uy_co2_2
+Alias cov_out(2,18) = cv_Uy_h2o_2
+Alias cov_out(2,20) = cv_Uy_Ts_2
+Alias cov_out(2,22) = cv_co2_co2_2
+Alias cov_out(2,27) = cv_h2o_h2o_2
+Alias cov_out(2,34) = cv_Ts_Ts_2
+Units cv_Uz_Uz_1 = (m/s)^2
+Units cv_Uz_Ux_1 = (m/s)^2
+Units cv_Uz_Uy_1 = (m/s)^2
+Units cv_Uz_co2_1 = mg/(m^2 s)
+Units cv_Uz_h2o_1 = g/(m^2 s)
+Units cv_Uz_Ts_1 = m C/s
+Units cv_Ux_Ux_1 = (m/s)^2
+Units cv_Ux_Uy_1 = (m/s)^2
+Units cv_Ux_co2_1 = mg/(m^2 s)
+Units cv_Ux_h2o_1 = g/(m^2 s)
+Units cv_Ux_Ts_1 = m C/s
+Units cv_Uy_Uy_1 = (m/s)^2
+Units cv_Uy_co2_1 = mg/(m^2 s)
+Units cv_Uy_h2o_1 = g/(m^2 s)
+Units cv_Uy_Ts_1 = m C/s
+Units cv_co2_co2_1 = (mg/m^3)^2
+Units cv_h2o_h2o_1 = (g/m^3)^2
+Units cv_Ts_Ts_1 = C^2
+Units cv_Uz_Uz_2 = (m/s)^2
+Units cv_Uz_Ux_2 = (m/s)^2
+Units cv_Uz_Uy_2 = (m/s)^2
+Units cv_Uz_co2_2 = mg/(m^2 s)
+Units cv_Uz_h2o_2 = g/(m^2 s)
+Units cv_Uz_Ts_2 = m C/s
+Units cv_Ux_Ux_2 = (m/s)^2
+Units cv_Ux_Uy_2 = (m/s)^2
+Units cv_Ux_co2_2 = mg/(m^2 s)
+Units cv_Ux_h2o_2 = g/(m^2 s)
+Units cv_Ux_Ts_2 = m C/s
+Units cv_Uy_Uy_2 = (m/s)^2
+Units cv_Uy_co2_2 = mg/(m^2 s)
+Units cv_Uy_h2o_2 = g/(m^2 s)
+Units cv_Uy_Ts_2 = m C/s
+Units cv_co2_co2_2 = (mg/m^3)^2
+Units cv_h2o_h2o_2 = (g/m^3)^2
+Units cv_Ts_Ts_2 = C^2
+Alias cov_out(1,39) = wnd_dir_comp_1
+Alias cov_out(1,41) = wnd_spd_1
+Alias cov_out(1,42) = rslt_wnd_spd_1
+Alias cov_out(1,43) = wnd_dir_csat3_1
+Alias cov_out(1,44) = std_wnd_dir_1
+'Alias cov_out(1,45) = t_hmp_mean
+'Alias cov_out(1,46) = e_hmp_mean
+
+Alias cov_out(2,39) = wnd_dir_comp_2
+Alias cov_out(2,41) = wnd_spd_2
+Alias cov_out(2,42) = rslt_wnd_spd_2
+Alias cov_out(2,43) = wnd_dir_csat3_2
+Alias cov_out(2,44) = std_wnd_dir_2
+Units wnd_dir_comp_1 = degrees_1
+Units wnd_spd_1 = m/s
+Units rslt_wnd_spd_1 = m/s
+Units wnd_dir_csat3_1 = degrees
+Units std_wnd_dir_1 = degrees
+Units wnd_dir_comp_2 = degrees
+Units wnd_spd_2 = m/s
+Units rslt_wnd_spd_2 = m/s
+Units wnd_dir_csat3_2 = degrees
+Units std_wnd_dir_2 = degrees
+Public disable_flag_on(2,2)
+Public n(2,1)
+Public warnings(2,2)
+Alias warnings(1,1) = csat_warnings_1
+Alias warnings(1,2) = irga_warnings_1
+Alias warnings(2,1) = csat_warnings_2
+Alias warnings(2,2) = irga_warnings_2
+Units n = unitless
+Units warnings = unitless
+Public batt_volt
+Units batt_volt = V
+Public flag(8)
+Dim wind_in(2,5)
+Dim tc_ref_in(1)
+Dim analog_data(3)
+Dim csat_data(2,5)
+Dim cov_in(2,8)
+Dim j
+Dim scan_count
+Dim hex_number
+Dim wind_east(2,1)
+Dim wind_north(2,1)
+Dim delays_loaded
+Dim T_CNR1_kelvin
+Dim i
+
+'variables for CNR1
+Public CM3Up
+Public CM3Dn
+Public CG3Up
+Public CG3Dn
+Public CNR1TC
+Public CNR1TK
+Public NetRs
+Public NetRl
+Public Albedo
+Public UpTot
+Public DnTot
+Public NetTot
+Public CG3UpCo
+Public CG3DnCo
+
+
+DataTable (SCAN_3_6,TRUE,ANALOG_DELAY)
+  Sample (1,tc_ref_in,IEEE4)
+EndTable
+DataTable (SCAN_1_4,TRUE,CSAT_DELAY)
+  Sample (5,wind_in(1,1),IEEE4)
+  Sample (5,wind_in(2,1),IEEE4)
+EndTable
+DataTable (ts_data,flag(8),1000)
+  DataInterval (0,SCAN_INTERVAL,mSec,100)
+  CardOut (0,-1)
+  Sample (3,Ux_1,IEEE4)
+  '	Sample (2,co2_1,IEEE4)
+  Sample (1,Ts_1,IEEE4)
+  Sample (1,press_1,IEEE4)
+  Sample (1,diag_csat_1,IEEE4)
+  Sample (3,Ux_2,IEEE4)
+  '	Sample (2,co2_2),IEEE4)
+  Sample (1,Ts_2,IEEE4)
+  '	Sample (1,press_2,IEEE4)
+  Sample (1,diag_csat_2,IEEE4)
+EndTable
+DataTable (comp_cov,TRUE,1)
+  DataInterval (0,OUTPUT_INTERVAL,min,1)
+  Covariance (8,cov_in(1,1),IEEE4,(disable_flag_on(1,1) OR disable_flag_on(1,2) OR NOT (flag(7))),36)
+  WindVector (1,wind_east(1,1),wind_north(1,1),IEEE4,(disable_flag_on(1,1) OR NOT (flag(7))),0,1,2)
+  WindVector (1,Uy_1,Ux_1,IEEE4,(disable_flag_on(1,1) OR NOT (flag(7))),0,1,2)
+  Covariance (8,cov_in(2,1),IEEE4,(disable_flag_on(2,1) OR disable_flag_on(2,2) OR NOT (flag(7))),36)
+  WindVector (1,wind_east(2,1),wind_north(2,1),IEEE4,(disable_flag_on(2,1) OR NOT (flag(7))),0,1,2)
+  WindVector (1,Uy_2,Ux_2,IEEE4,(disable_flag_on(2,1) OR NOT (flag(7))),0,1,2)
+EndTable
+
+
+DataTable (flux_10m,TRUE,4032)
+  DataInterval (0,OUTPUT_INTERVAL,Min,10)
+  CardOut (0,-1)
+  '	Sample (1,Fc_irga(1,1),IEEE4)
+  '	Sample (1,LE_irga(1,1),IEEE4)
+  Sample (1,Hs(1,1),IEEE4)
+  Sample (1,tau(1,1),IEEE4)
+  Sample (1,u_star(1,1),IEEE4)
+  Sample (5,cov_out(1,1),IEEE4)
+  Sample (1,cov_out(1,7),IEEE4)
+  Sample (4,cov_out(1,9),IEEE4)
+  Sample (1,cov_out(1,14),IEEE4)
+  Sample (3,cov_out(1,16),IEEE4)
+  Sample (1,cov_out(1,20),IEEE4)
+  Sample (1,cov_out(1,22),IEEE4)
+  Sample (1,cov_out(1,27),IEEE4)
+  Sample (1,cov_out(1,34),IEEE4)
+  Average (3,Ux_1,IEEE4,(disable_flag_on(1,1) OR NOT (flag(7)))
+  '	Average (2,co2_1,IEEE4,(disable_flag_on(1,2) OR NOT (flag(7)))
+  Average (1,Ts_1,IEEE4,(disable_flag_on(1,1) OR NOT (flag(7)))
+  '	Average (1,press_1,IEEE4,disable_flag_on(1,2))
+  Average (1,tc_ref,IEEE4,FALSE)
+  Sample (1,wnd_dir_comp_1,IEEE4)
+  Sample (1,wnd_dir_csat3_1,IEEE4)
+  Sample (1,wnd_spd_1,IEEE4)
+  Sample (1,rslt_wnd_spd_1,IEEE4)
+  Average (1,batt_volt,IEEE4,FALSE)
+  Sample (1,std_wnd_dir_1,IEEE4)
+  Totalize (1,n(1,1),IEEE4,FALSE)
+  Totalize (2,warnings(1,1),IEEE4,FALSE)
+  Totalize (4,diag_bits(1,1),IEEE4,FALSE)
+  Totalize (4,diag_bits(1,5),IEEE4,FALSE)
+  '	Average (1,agc_1,IEEE4,disable_flag_on(1,2))
+
+  Average(1, t_hmp_10m,ieee4,false)
+  Average(1, rh_hmp_10m,ieee4,false)
+
+  '  Sample (1,h2o_hmp_mean,IEEE4)
+  '  Sample (1,t_hmp_mean,IEEE4)
+
+EndTable
+
+DataTable (flux_3m,TRUE,2016)
+  DataInterval (0,OUTPUT_INTERVAL,Min,10)
+  CardOut (0,-1)
+  '	Sample (1,Fc_irga(2,1),IEEE4)
+  '	Sample (1,LE_irga(2,1),IEEE4)
+  Sample (1,Hs(2,1),IEEE4)
+  Sample (1,tau(2,1),IEEE4)
+  Sample (1,u_star(2,1),IEEE4)
+  Sample (5,cov_out(2,1),IEEE4)
+  Sample (1,cov_out(2,7),IEEE4)
+  Sample (4,cov_out(2,9),IEEE4)
+  Sample (1,cov_out(2,14),IEEE4)
+  Sample (3,cov_out(2,16),IEEE4)
+  Sample (1,cov_out(2,20),IEEE4)
+  Sample (1,cov_out(2,22),IEEE4)
+  Sample (1,cov_out(2,27),IEEE4)
+  Sample (1,cov_out(2,34),IEEE4)
+  Average (3,Ux_2,IEEE4,(disable_flag_on(2,1) OR NOT (flag(7)))
+  '	Average (2,co2_2,IEEE4,(disable_flag_on(2,2) OR NOT (flag(7)))
+  Average (1,Ts_2,IEEE4,(disable_flag_on(2,1) OR NOT (flag(7)))
+  '	Average (1,press_2,IEEE4,disable_flag_on(2,2))
+  Average (1,tc_ref,IEEE4,FALSE)
+  Sample (1,wnd_dir_comp_2,IEEE4)
+  Sample (1,wnd_dir_csat3_2,IEEE4)
+  Sample (1,wnd_spd_2,IEEE4)
+  Sample (1,rslt_wnd_spd_2,IEEE4)
+  Average (1,batt_volt,IEEE4,FALSE)
+  Sample (1,std_wnd_dir_2,IEEE4)
+  Totalize (1,n(2,1),IEEE4,FALSE)
+  Totalize (2,warnings(2,1),IEEE4,FALSE)
+  Totalize (4,diag_bits(2,1),IEEE4,FALSE)
+  Totalize (4,diag_bits(2,5),IEEE4,FALSE)
+  '	Average (1,agc_2,IEEE4,disable_flag_on(2,2))
+
+  Average(1, t_hmp_3m,ieee4,false)
+  Average(1, rh_hmp_3m,ieee4,false)
+
+
+EndTable
+
+DataTable (netrad,true,-1)
+  DataInterval (0,5,min,10)
+  CardOut (0,-1)
+
+  Average (1,CM3Up,IEEE4,False)
+  Average (1,CM3Dn,IEEE4,False)
+  Average (1,CG3UpCo,IEEE4,False)
+  Average (1,CG3DnCo,IEEE4,False)
+
+EndTable
+
+DataTable(WindRain10,True,-1)
+	DataInterval(0,10,Min,10)
+	WindVector (1,WS_ms,WindDir,FP2,False,0,0,1)
+	FieldNames("WS_ms_S_WVT,WindDir_D1_WVT")
+	Minimum(1,WS_ms,FP2,False,False)
+	Maximum(1,WS_ms,FP2,False,False)
+	Totalize(1,Rain_mm,FP2,False)
+
+EndTable
+
+
+DataTable(WindRain60,True,-1)
+	DataInterval(0,60,Min,10)
+	WindVector (1,WS_ms,WindDir,FP2,False,0,0,1)
+	FieldNames("WS_ms_S_WVT,WindDir_D1_WVT")
+	Minimum(1,WS_ms,FP2,False,False)
+	Maximum(1,WS_ms,FP2,False,False)
+	Totalize(1,Rain_mm,FP2,False)
+
+EndTable
+
+DisplayMenu ("Program Control",100)
+  MenuItem ("Save Fluxes?",flag(7))
+MenuPick (YES,NO)
+  MenuItem ("Save Time Series?",flag(8))
+MenuPick (YES,NO)
+EndMenu
+BeginProg
+  flag(7) = TRUE
+  flag(8) = TRUE
+  For j = 1 To 5
+    wind_in(1,j) = NaN
+    wind_in(2,j) = NaN
+  Next j
+  For j = 1 To 4
+    irga(1,j) = NaN
+    irga(2,j) = NaN
+  Next j
+  SDMSpeed (SDM_PER)
+  Scan (SCAN_INTERVAL,mSec,1000,0)
+    PanelTemp (tc_ref_in,250)
+
+
+    'Measure the HMP45C temperature and fraction humidity.
+    VoltSe (t_hmp_10m,2,mV1000,27,TRUE,200,250,0.1,0)
+
+    'Find the engineering units for the HMP45C temperature.
+    t_hmp_10m = t_hmp_10m-40
+
+
+    VoltSe (t_hmp_3m,1,mV1000,25,TRUE,200,250,0.1,-40)
+    VoltSe (rh_hmp_3m,1,mV1000,26,TRUE,200,250,0.1,0)
+
+    '05103 Wind Speed & Direction Sensor measurements WS_ms and WindDir
+		PulseCount(WS_ms,1,1,1,1,0.098,0)
+		BrHalf(WindDir,1,mV5000,23,1,1,5000,True,0,_60Hz,355,0)
+		If WindDir>=360 Then WindDir=0
+		'TE525MM/TE525M Rain Gauge measurement Rain_mm
+		PulseCount(Rain_mm,1,2,2,0,0.5,0)
+
+    'Find the HMP45C vapor pressure (kPa).
+    '    VaporPressure (e_hmp,t_hmp_10m,rh_hmp_10m)
+
+    'CNR1 Net Radiometer measurements CM3Up, CM3Dn, CG3Up, CG3Dn, CNR1TC, CNR1TK,
+    'NetRs, NetRl, Albedo, UpTot, DnTot, NetTot, CG3UpCo, and CG3DnCo
+    VoltDiff(CM3Up,1,mV20,1,True,0,250,137.1742,0)
+    VoltDiff(CM3Dn,1,mV20,2,True,0,250,137.1742,0)
+    VoltDiff(CG3Up,1,mV20,3,True,0,250,137.1742,0)
+    VoltDiff(CG3Dn,1,mV20,4,True,0,250,137.1742,0)
+    Resistance(CNR1TC,1,mV200,5,Ix1,1,1675,True,True,200,250,1.0,0)
+'        BrHalf4W(CNR1TC,1,mV50,mV50,5,Vx3,1,4200,True,True,0,250,1,0)
+    CNR1TC=CNR1TC/100
+    PRT(CNR1TC,1,CNR1TC,1,0)
+    CNR1TK=CNR1TC+273.18
+    NetRs=CM3Up-CM3Dn
+    NetRl=CG3Up-CG3Dn
+    Albedo=CM3Dn/CM3Up
+    UpTot=CM3Up+CG3Up
+    DnTot=CM3Dn+CG3Dn
+    NetTot=UpTot-DnTot
+    CG3UpCo=CG3Up+5.67*10^-8*CNR1TK^4
+    CG3DnCo=CG3Dn+5.67*10^-8*CNR1TK^4
+
+
+
+    CSAT3 (wind_in(1,1),1,3,91,CSAT_OPT)
+
+    CS7500 (co2_1,1,7,6)
+
+    CSAT3 (wind_in(2,1),1,4,91,CSAT_OPT)
+
+    CS7500 (co2_2,1,8,6)
+    If ( NOT (co2_1 = -99999) ) Then ( co2_1 = co2_1 * 44 )
+    h2o_1 = h2o_1 * 0.018
+    If ( NOT (co2_2 = -99999) ) Then ( co2_2 = co2_2 * 44 )
+    h2o_2 = h2o_2 * 0.018
+    batt_volt = Status.Battery(1,1)
+    CallTable SCAN_3_6
+    CallTable SCAN_1_4
+    If ( NOT delays_loaded ) Then ( scan_count = scan_count + 1 )
+    If ( scan_count = ANALOG_DELAY ) Then ( delays_loaded = TRUE )
+    GetRecord (analog_data(1),SCAN_3_6,ANALOG_DELAY)
+    tc_ref = analog_data(1)
+    GetRecord (csat_data(1,1),SCAN_1_4,CSAT_DELAY)
+    Ux_1 = csat_data(1,1)
+    Uy_1 = csat_data(1,2)
+    Uz_1 = csat_data(1,3)
+    Ts_1 = csat_data(1,4)
+    diag_csat_1 = csat_data(1,5)
+    wind_east(1,1) = -1 * Uy_1
+    wind_north(1,1) = Ux_1
+    Ux_2 = csat_data(2,1)
+    Uy_2 = csat_data(2,2)
+    Uz_2 = csat_data(2,3)
+    Ts_2 = csat_data(2,4)
+    diag_csat_2 = csat_data(2,5)
+    wind_east(2,1) = -1 * Uy_2
+    wind_north(2,1) = Ux_2
+    If ( (diag_csat_1 = NaN) OR (diag_csat_1 = &hf000) OR (diag_csat_1 = &hf03f) OR (diag_csat_1 = &hf001) OR (diag_csat_1 = &hf002) ) Then
+      disable_flag_on(1,1) = TRUE
+    Else
+      If (diag_csat_1 AND &hf000) Then
+        csat_warnings_1 = 1
+        disable_flag_on(1,1) = TRUE
+      Else
+        csat_warnings_1 = 0
+        disable_flag_on(1,1) = FALSE
+      EndIf
+    EndIf
+    diag_csat_1 = INT ((diag_csat_1 AND &hf000)/&h1000 + 0.5)
+    hex_number = &h0008
+    For j = 1 To 4
+      If ( ((diag_csat_1 AND hex_number) = hex_number) AND NOT (diag_csat_1 = &h000f) ) Then
+        diag_bits(1,j) = 1
+      Else
+        diag_bits(1,j) = 0
+      EndIf
+      If ( diag_csat_1 = NaN ) Then ( diag_bits(1,j) = NaN )
+      hex_number = INT ((hex_number/&h0002) + 0.5)
+    Next j
+    If ( (disable_flag_on(1,1) = TRUE) AND (csat_warnings_1 = 0) ) Then diag_csat_1 = csat_data(1,5)
+    If ( (diag_csat_2 = NaN) OR (diag_csat_2 = &hf000) OR (diag_csat_2 = &hf03f) OR (diag_csat_2 = &hf001) OR (diag_csat_2 = &hf002) ) Then
+      disable_flag_on(2,1) = TRUE
+    Else
+      If (diag_csat_2 AND &hf000) Then
+        csat_warnings_2 = 1
+        disable_flag_on(2,1) = TRUE
+      Else
+        csat_warnings_2 = 0
+        disable_flag_on(2,1) = FALSE
+      EndIf
+    EndIf
+    diag_csat_2 = INT ((diag_csat_2 AND &hf000)/&h1000 + 0.5)
+    hex_number = &h0008
+    For j = 1 To 4
+      If ( ((diag_csat_2 AND hex_number) = hex_number) AND NOT (diag_csat_2 = &h000f) ) Then
+        diag_bits(2,j) = 1
+      Else
+        diag_bits(2,j) = 0
+      EndIf
+      If ( diag_csat_2 = NaN ) Then ( diag_bits(2,j) = NaN )
+      hex_number = INT ((hex_number/&h0002) + 0.5)
+    Next j
+    If ( (disable_flag_on(2,1) = TRUE) AND (csat_warnings_2 = 0) ) Then diag_csat_2 = csat_data(2,5)
+    agc_1 = INT ((diag_irga_1 AND &h000f) * 6.25 + 0.5)
+    diag_irga_1 = (NOT (INT ((diag_irga_1 AND &h00f0)/&h0010 + 0.5)) AND &h000f)
+    If ( (ABS (co2_1) >= 99990) OR (co2_1 = NaN) ) Then
+      disable_flag_on(1,2) = FALSE'TRUE
+    Else
+      If (diag_irga_1 AND &h000f) Then
+        irga_warnings_1 = 1
+        disable_flag_on(1,2) = FALSE'TRUE
+      Else
+        irga_warnings_1 = 0
+        disable_flag_on(1,2) = FALSE
+      EndIf
+    EndIf
+    hex_number = &h0008
+    For j = 1 To 4
+      If ( (diag_irga_1 AND hex_number) = hex_number) Then
+        diag_bits(1,j+4) = 1
+      Else
+        diag_bits(1,j+4) = 0
+      EndIf
+      If ( (ABS (co2_1) >= 99990) OR (co2_1 = NaN) ) Then ( diag_bits(1,j+4) = NaN )
+      hex_number = INT ((hex_number/&h2) + 0.5)
+    Next j
+    agc_2 = INT ((diag_irga_2 AND &h000f) * 6.25 + 0.5)
+    diag_irga_2 = (NOT (INT ((diag_irga_2 AND &h00f0)/&h0010 + 0.5)) AND &h000f)
+    If ( (ABS (co2_2) >= 99990) OR (co2_2 = NaN) ) Then
+      disable_flag_on(2,2) = FALSE'TRUE
+    Else
+      If (diag_irga_2 AND &h000f) Then
+        irga_warnings_2 = 1
+        disable_flag_on(2,2) = FALSE'TRUE
+      Else
+        irga_warnings_2 = 0
+        disable_flag_on(2,2) = FALSE
+      EndIf
+    EndIf
+    hex_number = &h0008
+    For j = 1 To 4
+      If ( (diag_irga_2 AND hex_number) = hex_number) Then
+        diag_bits(2,j+4) = 1
+      Else
+        diag_bits(2,j+4) = 0
+      EndIf
+      If ( (ABS (co2_2) >= 99990) OR (co2_2 = NaN) ) Then ( diag_bits(2,j+4) = NaN )
+      hex_number = INT ((hex_number/&h2) + 0.5)
+    Next j
+    If ( delays_loaded ) Then
+      If ( flag(8) AND IfTime (0,360,Min) ) Then ( FileMark (ts_data) )
+      CallTable ts_data
+      cov_in(1,1) = Uz_1
+      cov_in(1,2) = Ux_1
+      cov_in(1,3) = Uy_1
+      cov_in(1,4) = co2_1
+      cov_in(1,5) = h2o_1
+      cov_in(1,7) = Ts_1
+      cov_in(2,1) = Uz_2
+      cov_in(2,2) = Ux_2
+      cov_in(2,3) = Uy_2
+      cov_in(2,4) = co2_2
+      cov_in(2,5) = h2o_2
+      cov_in(2,7) = Ts_2
+      CallTable comp_cov
+      If ( NOT disable_flag_on(1,1) AND NOT disable_flag_on(1,2) AND flag(7) ) Then
+        n(1,1) = 1
+      Else
+        n(1,1) = 0
+      EndIf
+      If ( NOT disable_flag_on(2,1) AND NOT disable_flag_on(2,2) AND flag(7) ) Then
+        n(2,1) = 1
+      Else
+        n(2,1) = 0
+      EndIf
+      If ( comp_cov.Output(1,1) ) Then
+        GetRecord (cov_out(1,1),comp_cov,1)
+        wnd_dir_comp_1 = (wnd_dir_comp_1 + ANGLE_FROM_NORTH)
+        If ( wnd_dir_comp_1 ) < 0 Then ( wnd_dir_comp_1 = wnd_dir_comp_1 + 360)
+        wnd_dir_comp_1 = wnd_dir_comp_1 MOD 360
+        If ( wnd_dir_csat3_1 ) > 180 Then ( wnd_dir_csat3_1 = wnd_dir_csat3_1 - 360 )
+        wnd_dir_comp_2 = (wnd_dir_comp_2 + ANGLE_FROM_NORTH)
+        If ( wnd_dir_comp_2 ) < 0 Then ( wnd_dir_comp_2 = wnd_dir_comp_2 + 360)
+        wnd_dir_comp_2 = wnd_dir_comp_2 MOD 360
+        If ( wnd_dir_csat3_2 ) > 180 Then ( wnd_dir_csat3_2 = wnd_dir_csat3_2 - 360 )
+        Fc_irga(1,1) = cv_Uz_co2_1
+        LE_irga(1,1) = LV * cv_Uz_h2o_1
+        Hs(1,1) = rho_a * CP * cv_Uz_Ts_1
+        tau(1,1) = SQR ((cv_Uz_Ux_1*cv_Uz_Ux_1) + (cv_Uz_Uy_1*cv_Uz_Uy_1))
+        u_star(1,1) = SQR (tau(1,1))
+        tau(1,1) = rho_a * tau(1,1)
+        Fc_irga(2,1) = cv_Uz_co2_2
+        LE_irga(2,1) = LV * cv_Uz_h2o_2
+        Hs(2,1) = rho_a * CP * cv_Uz_Ts_2
+        tau(2,1) = SQR ((cv_Uz_Ux_2*cv_Uz_Ux_2) + (cv_Uz_Uy_2*cv_Uz_Uy_2))
+        u_star(2,1) = SQR (tau(2,1))
+        tau(2,1) = rho_a * tau(2,1)
+      EndIf
+
+
+      CallTable flux_10m
+      CallTable flux_3m
+    EndIf
+    CallTable netrad
+    CallTable(WindRain10)
+		CallTable(WindRain60)
+
+  NextScan
+EndProg
+

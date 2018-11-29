@@ -1,0 +1,910 @@
+'	CR800/CR1000 Program Code for Irradiance, Inc. Rotating Shadowband Radiometer (RSR2)
+' $DateTime: 2014/06/17 21:01:35 $
+' $Revision: #20 $
+'
+'	                     Copyright 2006-2013; All rights reserved.
+'           This code may be used only with Irradiance, Inc. RSR2 equipment.
+'	                       User modifications at user's risk.
+'
+'  NOTES
+'
+'  Datalogger clock is set to Coordinated Universal Time (UTC)
+'    OR Local Standard Time by attached GPS.
+'
+'=========================================================================================
+'  PROGRAM OPERATION
+'=========================================================================================
+'  This program handles systems with both WXT520 and conventional wind, pressure, and air
+'  temperature and relative humidity sensors.  The wiring configuration is intended for
+'  RSR2 stations using either CR800 or CR1000 dataloggers.  With this program code a GPS
+'  is used to set the datalogger clock and to set the latitude, longitude and altitude of
+'  of the station.  A cleaning routine is implemented with a momentary switch used to
+'  request a two-minute pause in rotations to allow for sensor cleaning and leveling. As
+'  part of this process a "Cleaning" datatable is created to document the cleaning event
+'  with before and after measurements. In addition to the calibration mode routine (and
+'  the Boolean Flag "CalibMode", two more controls are implemented.  A "SweepData" flag
+'  is used to collect statistics on the sweep processing for each sweep.  CalibMode and
+'  SweepData are all reset to false (off) each local midnight as a protection against
+'  user error.  Another Boolean "SunUP" is introduced to use as a standard control used
+'  throughout the program. SunUp is true when the sun's apparent (refracted) elevation
+'  is greater than 0.27 degrees, with the lower limb of the sun on the horizon.
+'
+'  A "Constant Table" is used at the beginning of the program code to set up the station
+'  location and calibration factors.  This constant table can be edited without resending
+'  the program code to a datalogger.  LoggerNet or a Keyboard can be used for editing.
+'  User input latitude, longitude and altitude are entered and used to initialize the
+'  station location.  When the GPS has a good location fix (WAAS) its values override the
+'  user settings.  The distance from the GPS and user settings is recorded in the daily
+'  status table.
+'=========================================================================================
+'  WIRING PANEL TERMINATIONS: SEE CONFIGURATION CONSTANTS BELOW FOR PORT NUMBERS
+'=========================================================================================
+'  Standard sensors for configurations effective 1 April 2013-----------------------------
+'  Primary RSR2 sensor    Yellow        SEChanPrimary_c
+'  Primary RSR2 sensor    Grey          Signal ground
+'  Secondary RSR2 sensor  Yellow        SEChanSecondary_c
+'  Secondary RSR2 sensor  Grey          Signal ground
+'  Reference Pyranometer  Red           SEChanRefPyranometer_c
+'  Reference Pyranometer  Blue          Signal ground
+'  Reference PryheliometerRed           SEChanRefPyrheliometer_c
+'  Reference PryheliometerBlue          Signal ground
+'  Motor controller       Grey          PortBandControl_c   Band control
+'  Motor controller1      Red          +5V                  Logic power
+'  Motor controller1      Blue          not connected       Motion feedback
+'  Motor controller1      Black         Power ground        Power ground
+'  GPS16x                 Clear/Shield  Power ground        Power ground
+'  GPS16x                 Grey          ComPortGPS_c        Second pulse trigger
+'  GPS16x                 White         ComPortGPS_c        RX NEMA Strings
+'  GPS16x                 Red          +12V             Power
+'  GPS16x                 Black         Power ground    Power ground
+'  GPS16x                 Yellow        Power ground    Power ground
+'  GPS16x                 Blue          Power ground    Power ground
+'  Red Cleaning Button    Black         Pulse 2         Switch closure
+'  Red Cleaning Button    Black         Signal ground   Switch closure
+'  Optional weather and meteorological sensors--------------------------------------------
+'  Basic weather option selected by Constant Table entry Weather_Type_c = 0 no sensor
+'  Weather_Type_c = 1 is Vaisala WXT520 configured by Irradiance, Inc.
+'  WXT520                 White         PortSDI12_c     SDI-12 signal
+'  WXT520                 Blue          PortSDI12_c     SDI-12 signal
+'  WXT520                 Clear/Shield  Power ground    Power ground
+'  WXT520                 Orange        Power ground    Power ground
+'  WXT520                 Brown         +12V            Power
+'  WXT520                 Green         Power ground    Power ground
+'  Optional TE525 Tipping Bucket Rain Guage (when GPS is not installed)-------------------
+'  TE525                  White         +5V             Signal Return
+'  TE525                  Black         TippingBucket_c Signal
+'  TE525                  Clear         Power ground    Power ground
+'  Individual sensor options--------------------------------------------------------------
+'  Wind sensor options selected by Constant Table entry: Wind_Type_c = 0 no sensor
+'  Use SE6 and P1 channels for winds sensors
+'  Wind_Type_c = 1 is for R.M.Young wind speed and direction sensors
+'  RMY_Type_c = 1 is the RMY Wind Sentry configured by Campbell Scientific
+'  RMY_Type_c = 2 is the RMY 05103 propeller type configured by Campbell Scientific
+'  Wind_Type_c = 1 with RMY_Type_c = 1 for the RMY Wind Sentry from Campbell Scientific
+'  CSI_03101              Black        Pulse 1        Wind speed signal
+'  CSI_03101              White        Signal ground  Wind speed reference
+'  CSI_03101              Clear        Signal ground  Wind speed shield
+'  CSI_03101              Red          SEChanWind_c   Wind direction signal
+'  CSI_03101              Black        ExChanWind_c   Wind direction excitation
+'  CSI_03101              White        Signal ground  Wind speed signal
+'  CSI_03101              Clear        Signal ground  Wind speed signal
+'  Wind_Type_c = 1 with RMY_Type_c = 2 for the RMY Wind Monitor from Campbell Scientific
+'  CSI_05103              Red          Pulse 1        Wind speed signal
+'  CSI_05103              Black        Signal ground  Wind speed reference
+'  CSI_05103              Green        SEChanWind_c   Wind direction signal
+'  CSI_05103              Blue         ExChanWind_c   Wind direction excitation
+'  CSI_05103              White        Signal ground  Wind direction
+'  CSI_05103              Clear        Signal ground  Wind shield wire
+'  Wind_Type_c = 2 is MetOne 034B Windset from Campbell Scientific
+'  CSI_034B               Red          Pulse 1          Wind speed signal
+'  CSI_034B               Black        Signal ground    Wind speed reference
+'  CSI_034B               Green        SEChanWind_c     Wind direction signal
+'  CSI_034B               Blue         ExChanWind_c     Wind direction excitation
+'  CSI_034B               White        Signal ground    Wind direction reference
+'  CSI_034B               Clear        Signal ground    Wind direction shield
+'  Barometer sensor options selected by Constant Table entry: Press_Type_c = 0 no sensor
+'  Use SE5 and SW12 power for barometric pressure sensors
+'  Press_Type_c = 1 is the Campbell CS106 (Vaisala PTB110) from Campbell Scientific
+'  CSI-CS106              Blue         SEChanPress_c    Pressure signal
+'  CSI-CS106              Yellow       Signal ground    Pressure reference
+'  CSI-CS106              Black        Power ground     Power ground
+'  CSI-CS106              Green        +5V              External trigger
+'  CSI-CS106              Red          ComPowerPort_c   Switched 12V power
+'  CSI-CS106              Clear        Power ground     Power ground
+'  Press_Type_c = 2 is the Setra 276 from Setra Systems
+'  Setra-276              Blue         SEChanPress_c    Pressure signal
+'  Setra-276              Yellow       Signal ground6   Pressure reference
+'  Setra-276              Black        Power ground     Power ground
+'  Setra-276              Green        +5V              External trigger
+'  Setra-276              Red          ComPowerPort_c   Switched 12V power
+'  Setra-276              Clear        Power ground     Power ground
+'  Press_Type_c = 3 is the Setra 278 from Setra Systems (Offset 600; Mult 0.20
+'  Setra-278              Blue         SEChanPress_c    Pressure signal
+'  Setra-278              White        Signal ground    Pressure reference
+'  Setra-278              Black        Power ground     Power ground
+'  Setra-278              Green        +5V              External trigger
+'  Setra-278              Red          ComPowerPort_c   Switched 12V power
+'  Setra-278              Clear        Power ground     Power ground
+' Temperature sensor options selected by Constant Table entry: Temp_Type_c = 0 no sensor
+'  Temp_Type_c = 1 is the Campbell CS215 temperature and Relative Humidity probe
+'  CSI_215                Red          +12V             Power
+'  CSI_215                White        Power ground     Power
+'  CSI_215                Black        Power ground     Power
+'  CSI_215                Green        PortSDI12_c      SDI12 signal
+'  CSI_215                Clear        Signal ground    Signal ground
+'  CS120 Visibility Sensor
+'  CS120                  Black        Power ground       Ground
+'  CS120                  Clear        Power ground       Shield
+'  CS120                  Green        Power ground       Serial ground.
+'  CS120                  Red          +12V               Power
+'  CS120                  Blue         CS120Comport_c/TX  Serial data logger -> CS120
+'  CS120                  White        CS120Comport_c/RX  Serial data CS120 -> logger
+
+'=========================================================================================
+'  CONFIGURATION CHANNELS AND PORTS FOR STATION-SPECIFIC CONFIGURATION
+'=========================================================================================
+' Analog Input Channels.
+' Note: Diff1 is SE1+SE2, Diff2 is SE3+SE4, etc.
+Const SEChanPrimary_c          As Long = 1
+Const SEChanSecondary_c        As Long = 2
+Const SEChanRefPyranometer_c   As Long = 3
+Const SEChanRefPyrheliometer_c As Long = 4
+Const SEChanWind_c             As Long = 5
+Const SEChanPress_c            As Long = 6
+
+' Analog Excitation Channels.
+Const ExChanWind_c             As Long = 1
+
+' Control Ports.
+' Note: Com1 is C1+C2, Com2 is C3+C4, etc.
+Const ComPortGPS_c             As Long = Com1
+Const ComPortCS120_c           As Long = 0  ' Com Port for CS120, or zero if not present.
+Const PortSDI12_c              As Long = 3
+Const PortWXT520_c             As Long = 3
+Const PortBandControl_c        As Long = 4
+Const ComPowerPort_c           As Long = 9  '9 = SW12 
+Const TippingBucket_c          As Long = 11 'Control Port 1 configured as PulseInput = 11
+
+Const SDI12AddrWXT520_c        As Long = 0
+
+Include("CPU:CONFIG.DLD")
+
+#If ComPortCS120_c <> 0
+Include("CPU:CS120.CR1")
+#EndIf
+
+Const MidnightMin_c = -1*NOT(-1*LocalTime_c)*((1440-TimeZoneMin_c) MOD 1440)
+
+AngleDegrees
+' Declare Variables which are used during onsite validation first so that they appear first in the public table
+Public Global, Direct, Diffuse
+Public Global_Raw
+Public Global_Raw_2
+'  Declarations for WXT520
+Public WXT520(10)
+Alias WXT520(1) = WDir
+Alias WXT520(2) = WSpd
+Alias WXT520(3) = WSmax
+Alias WXT520(4) = AirTemp
+Alias WXT520(5) = RH
+Alias WXT520(6) = Press
+Alias WXT520(7) = Rain
+Alias WXT520(8) = Hail
+Public Rain_Accum, Hail_Accum, Batt_Volt, Panel_Temp
+Public ZenDeg
+'  Variables for Campbell Solar Position calculator
+Public SolPos(5)
+Alias SolPos(1) = AzDeg
+Alias SolPos(2) = ElDeg
+Alias SolPos(3) = HourAngle
+Alias SolPos(4) = Declination
+Alias SolPos(5) = AirMass ' Pressure Corrected.
+Public AirMassOptical ' Not Pressure Corrected.
+Public CosZen
+Public Direct_Raw, Diffuse_Raw
+Public Global_2
+' Declare Site Variables
+Public Lat, Lon, Alt, LiCor_Mult, LiCor_Ohm, FD
+Public Place As String
+Public LiCor_SN As String
+'	Declare Variables and Units for Non RSR Measurements
+Public Press_Ref
+' Pressure reference set with Barometric Formula (exponential atmosphere)
+' Pres variations are by air p=f(temp) function or by direct measurement
+' Variable to control the power on state of SW12 supply to the cell modem
+'	Variables for solar position and Bird Clear Sky Model
+Public LiCor_Cal, LiCor_Cal2
+'  Variables for cleaning control and measurement
+Public Cleaning As Boolean
+Dim CountDown As Long
+Dim CleanScans As Long
+Public Pulse2
+Public Pre_Clean, Post_Clean
+Public CleanRequest As Boolean
+Dim CleanCount
+'	Variables for Shadowband control and measurement
+Public ConfigError As Boolean
+Public Global_Energy, Diffuse_Energy, Direct_Energy 'Values in energy (not power) units
+Public Rot_Count As Long, No_Well_Count As Long, Low_Volt_Count As Long
+Public SweepData As Boolean
+Public Start_Sequence As Boolean
+Public Rotation_State As Boolean
+Public Rotation_this_Scan As Boolean
+Public SunUp As Boolean
+Public Freeze As Boolean
+Public Center_Index As Long
+Public Well_Width As Long
+Public Result1, Result2
+Public DNI_TS, DNI_TS_Cal, GHI_TS, GHI_TS_Cal
+Public DNI_TS_SN As String, GHI_TS_SN As String
+Public GHI_TS_Exists As Boolean
+Public DNI_TS_Exists As Boolean
+Public LiCor_2_Exists As Boolean
+'	Variables for calibration mode
+Public CalibMode As Boolean
+Public A0, B1
+'  Variables for Campbell's NetworkTimeProtocol function
+Public Time(9)
+Alias Time(1) = Year
+Alias Time(2) = Month
+Alias Time(3) = DOM
+Alias Time(4) = Hour
+Alias Time(5) = Minute
+Alias Time(6) = Second
+Alias Time(7) = uSecond
+Alias Time(8) = DOW
+Alias Time(9) = DOY
+'  Variables for sweep reduction
+Public target As Long
+Public minpos As Long
+Public smoothpos As Long
+
+' Center of sweep around well_center, and offset of this range.
+Dim SweepOffset As Long
+Dim SweepCenter(100)
+
+Public CLR 'CLR defined as Diffuse/Global as a measure of clearness
+Public CS215(2) 'Declaration for CS215 option
+'	Constants
+Const Pi = 3.1415927
+Const StdPressure = 1013.25 'Sea level pressure, mB.
+'	Units
+Units Batt_Volt=Volts
+Units AirTemp=Deg C
+Units RH=%
+Units Press=mB 'millibars or hectopascals (they are the same)
+Units Global_Raw=W/m^2
+Units Direct_Raw=W/m^2
+Units Diffuse_Raw=W/m^2
+Units Global=W/m^2
+Units Direct=W/m^2
+Units Diffuse=W/m^2
+Units Global_Energy=kWh/m^2
+Units Direct_Energy=kWh/m^2
+Units Diffuse_Energy=kWh/m^2
+'
+'Data Tables =============================================================================
+'
+#If ThreeSecondData_c Then
+DataTable (_03_Second,ThreeSecondData AND SunUp,-1)
+  Sample (1,Global,IEEE4)
+  Sample (1,Diffuse,IEEE4)
+  Sample (1,Direct,IEEE4)
+EndTable
+#EndIf
+
+DataTable(SweepData, SweepData AND Rotation_this_Scan AND SunUp, 1500)
+  Sample(1, Well_Width, FP2)
+  Sample(1, Global_Raw, FP2)
+  Sample(1, Band_Blocked, FP2)
+  Sample(1, Diffuse_Raw, FP2)
+  Sample(1, Direct_Raw, FP2)
+EndTable
+DataTable(_01_Min, True, -1) 'Data table for 1-minute records
+  DataInterval(0, 1, Min, -1) 'Change interval as required for application
+  Average(1, Global, FP2, False)
+  Average(1, Global_2, FP2, NOT LiCor_2_Exists)
+  Average(1, Direct, FP2, False)
+  Average(1, Diffuse, FP2, False)
+  Average(1, GHI_TS, FP2, NOT GHI_TS_Exists)
+  Average(1, DNI_TS, FP2, NOT DNI_TS_Exists)
+  Average(1, AirTemp, FP2, False)
+  Average(1, RH, FP2, False)
+  Average(1, Press, FP2, False)
+  Average(1, ZenDeg, FP2, False)
+  WindVector(1, WSpd, WDir, FP2, False, 0, 0, 0)
+  Maximum(1, WSmax, FP2, False, False)
+  Average(1, Global_Raw, FP2, False)
+  Average(1, Direct_Raw, FP2, False)
+  Average(1, Diffuse_Raw, FP2, False)
+  #If ComPortCS120_c
+    Average(1, Visibility, FP2, False)
+  #EndIf
+EndTable
+DataTable(_01_Hour, True, -1) 'Data table for 1-hour records
+  DataInterval(0, 1, Hr, -1) 'Change interval as required for application
+  Average(1, Global, FP2, False)
+  Average(1, Global_2, FP2, NOT LiCor_2_Exists)
+  Average(1, Direct, FP2, False)
+  Average(1, Diffuse, FP2, False)
+  Average(1, GHI_TS, FP2, NOT GHI_TS_Exists)
+  Average(1, DNI_TS, FP2, NOT DNI_TS_Exists)
+  Average(1, AirTemp, FP2, False)
+  Average(1, RH, FP2, False)
+  Average(1, Press, FP2, False)
+  WindVector(1, WSpd, WDir, FP2, False, 0, 0, 0)
+  Maximum(1, WSmax, FP2, False, False)
+EndTable
+DataTable(_01_Day, True, -1) 'Data table for 1-Day records
+  DataInterval(MidnightMin_c, 1440, Min, -1)
+  'Note time stamp on record will be UCT at local midnight
+  Totalize(1, Global_Energy, FP2, False)
+  Totalize(1, Direct_Energy, FP2, False)
+  Totalize(1, Diffuse_Energy, FP2, False)
+  Maximum(1, Global, FP2, False, 0)
+  Maximum(1, Direct, FP2, False, 0)
+  Maximum(1, Diffuse, FP2, False, 0)
+  Minimum(1, AirTemp, FP2, False, 0)
+  Average(1, AirTemp, FP2, False)
+  Maximum(1, AirTemp, FP2, False, 0)
+  Minimum(1, RH, FP2, False, 0)
+  Average(1, RH, FP2, False)
+  Maximum(1, RH, FP2, False, 0)
+  Minimum(1, Press, FP2, False, 0)
+  Average(1, Press, FP2, False)
+  Maximum(1, Press, FP2, False, 0)
+  WindVector(1, WSpd, WDir, FP2, False, 0, 0, 0)
+  Maximum(1, WSmax, FP2, False, False)
+  Minimum(1, Batt_Volt, FP2, False, False)
+  Maximum(1, Batt_Volt, FP2, False, False)
+  Maximum(1, Panel_Temp, FP2, False, False)
+  Minimum(1, Panel_Temp, FP2, False, False)
+  Average(1, Well_Width, FP2, NOT Rotation_this_Scan)
+  StdDev(1, Well_Width, FP2, NOT Rotation_this_Scan)
+  '		Note: the Not sets this False to capture only daytime rotation scans
+  Maximum(1, Rot_Count, FP2, False, False)
+  Maximum(1, No_Well_Count, FP2, False, False)
+  Maximum(1, Low_Volt_Count, FP2, False, False)
+  Average(1, LiCor_Mult, FP2, False)
+  Maximum(1, DLat, FP2, False, False)
+  Maximum(1, Dlon, FP2, False, False)
+  Maximum(1, Distance, FP2, False, False)
+  Average(1, FD_c, FP2, False)
+EndTable
+DataTable(Calib, True, 1500) 'Data table for field calibration procedure
+  Sample(1, AirTemp, IEEE4)
+  Sample(1, PyrTempRise_C, IEEE4)
+  Sample(1, LiCor_Cal, FP2)
+  Sample(1, RH, IEEE4)
+  Sample(1, Press, IEEE4)
+  Sample(1, AirMass, IEEE4)
+  Sample(1, AzDeg, IEEE4)
+  Sample(1, ElDeg, IEEE4)
+  Sample(1, FA, IEEE4)
+  Sample(1, FB, IEEE4)
+  Sample(1, FC, IEEE4)
+  Sample(1, Global_Raw, IEEE4)
+  Sample(1, Global, IEEE4)
+  Sample(1, Diffuse_Raw, IEEE4)
+  Sample(1, Diffuse, IEEE4)
+  Sample(1, Direct_Raw, IEEE4)
+  Sample(1, Direct, IEEE4)
+  Sample(1, Direct_LPF, IEEE4)
+  Sample(1, DNI_TS, IEEE4)
+  Sample(1, ZenDeg, IEEE4)
+  Sample(1, CLR, IEEE4)
+  Sample(1, SkyStability, IEEE4)
+  Sample(1, FD_Sample, IEEE4)
+  Sample(1, FD_Mean, IEEE4)
+  Sample(1, FD_StD, IEEE4)
+EndTable
+DataTable(_Clean, True, 366) 'Data table pre and post cleaning records
+  Sample(1, Pre_Clean, IEEE4)
+  Sample(1, Post_Clean, IEEE4)
+EndTable
+DataTable(SweepRaw, True, 5)
+  Sample(1, SweepOffset, Long)
+  Sample(1, Rotation_State, Boolean)
+  Sample(100, SweepCenter, FP2)
+EndTable
+  
+'=========================================================================================
+'================================ START PROTECTED CODE ===================================
+'=========================================================================================
+
+
+'-----------------------------------------------------------------------------------------
+Sub Wind_Measurement
+  If Wind_Type_c = 1 Then 'R.M. Young
+    If RMY_Type_c = 1 Then 'RMY Wind Sentry
+      WSpd = 0.75 * WSpd + 0.2
+      If WSpd < 0.21 Then WSpd = 0.0
+      BrHalf(WDir, 1, mV2500, SEChanWind_c, ExChanWind_c, 1, 2500, True, 0, _60Hz, 355, WD_offset_c)
+    ElseIf RMY_Type_c = 2 Then 'RMY 05103 Propeller type sensor
+      WSpd= 0.098 * WSpd + 0.2
+      If WSpd < 0.21 Then WSpd = 0.0
+      BrHalf(WDir, 1, mV2500, SEChanWind_c, ExChanWind_c, 1, 2500, True, 0, _60Hz, 355, WD_offset_c)
+    EndIf
+  ElseIf Wind_Type_c = 2 Then 'MetOne sensor (NOT CSI MetOne sensor)
+    WSpd = 0.799 * WSpd + 0.2811
+    If WSpd = 0.2811 Then WSpd = 0
+    BrHalf(WDir, 1, mV2500, SEChanWind_c, ExChanWind_c, 1, 2500, True, 0, _60Hz, 712, WD_offset_c)
+  EndIf
+  WSmax = WSpd 'store value for recording max in data tables
+  If WDir < 0 Then WDir = WDir + 360    'correct WD due to possible offset
+  If WDir >= 360 Then WDir = WDir - 360 'correct WD due to possible offset
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Time_Location_SunPos
+  Public GPSData(15), nmea_sentence(2) As String * 90
+  Public DLat, Dlon, DAlt, Distance
+  Dim Q1, Q2, Q3
+  Alias GPSData(1) = Lat_a 'Integer degrees of latitude
+  Alias GPSData(2) = Lat_b 'Decimal minutes of latitude
+  Alias GPSData(3) = Lon_a 'Integer degrees of longitude
+  Alias GPSData(4) = Lon_b 'Decimal minutes of longitude
+  Alias GPSData(8) = fix_quality '0=none,1=regular,2=differential,6=estimate
+  Alias GPSData(10) = Alt_GPS
+  
+  #If (GPS_c <> 0) Then
+     GPS(GPSData(1), ComPortGPS_c, LocalTime_c*TimeZoneMin_c*60, MaxClkError, nmea_sentence(1))
+  #EndIf
+  '  control ports c1/c2 on CR800 or CR1000. Com2 is used for RSR2 motor control (C4)
+  '  and SDI12 devices (C3) such as WXT520. The following code updates the lat lon
+  '  based on the GPS readings.
+  RealTime(Time) 'Time at start of scan not latest GPS update from above
+  'Reset the solar position (SolPos is calculated 15 seconds ahead)
+  Second = Second + SlowScan_c / 2 'Calculate position at middle of slow sequence scan
+
+  If (GPS_c <> 0) Then
+    If fix_quality = 2 Then 'Wait until there is a valid GPS fix to process data
+      Lat = Lat_a + Lat_b / 60.
+      Lon = Lon_a + Lon_b / 60.
+      Alt = Alt_GPS
+    EndIf
+
+    DLat = Lat - Lat_c
+    Dlon = Lon - Lon_c
+    DAlt = Alt - Alt_c
+    Q1 = SIN(DLat) * SIN(DLat / 2) + SIN(Dlon / 2) ^ 2 * COS(Lat) * COS(Lat_c)
+    Q2 = 2 * (Pi / 180) * ATN2(SQR(Q1), SQR(1 - Q1))
+    Q3 = 6371000.
+    Distance = Q3 * Q2
+  EndIf
+  
+  SolarPosition(SolPos, Time, LocalTime_c*TimeZoneMin_c*60, Lat, Lon, Alt, Press, AirTemp)
+  AirMassOptical = AirMass * (StdPressure / Press)
+
+  ZenDeg = 90.0 - ElDeg
+  CosZen = COS(ZenDeg)
+  If ElDeg > 0.27 Then SunUp = True Else SunUp = False
+EndSub
+
+'-----------------------------------------------------------------------------------------
+'	Subroutine to rotate the shadowband and determine the diffuse irradiance
+Sub Rotation
+  Dim ZZ(1280), Global_Start, Global_End
+  Dim Total_Start, Total_End, Band_Blocked_Start, Band_Blocked_End
+  Dim I As Long
+  Public Global_Prior_Scan, Band_Blocked
+  Public Global_Ramping As Boolean
+  Global_Ramping = False
+  Global_Prior_Scan = Global_Raw
+  If Global_Raw <= 0.5 OR (LiCor_2_Exists AND Global_Raw_2 <= 0.5) Then Exit Sub 'Stop rotations for leveling primary or secondary sensor
+  If Batt_Volt < 10.5 Then 'Stop rotations to save battery
+    Diffuse_Raw = 0.0
+    Low_Volt_Count = Low_Volt_Count + 1
+    Exit Sub
+  EndIf
+  Rotation_this_Scan = True 'This is set = false at start of each scan
+  Rotation_State = NOT Rotation_State
+  Rot_Count = Rot_Count + 1
+  PortSet(PortBandControl_c, Rotation_State)
+  VoltSe(ZZ, 1280, mV25, -SEChanPrimary_c, False, 1000, 250, LiCor_Cal, 0.0)
+  Call Reduce(ZZ())
+  'Process ZZ to get Global_Raw at beginning and end of rotation
+  AvgSpa(Global_Start, 5, ZZ(1))
+  AvgSpa(Global_End, 5, ZZ(1276))
+  Global_Raw = 0.5 * (Global_Start + Global_End)
+  If (Well_Width > 40 OR Well_Width < 10 OR _
+    Center_Index - Well_Width - 1 < 1 OR _
+    Center_Index + Well_Width + 1 > 1280 ) Then 'Case of poorly defined well
+    Diffuse_Raw = Global_Raw
+    Global_Start = 0.0
+    Global_End = 0.0
+    Band_Blocked_Start = 0.0
+    Band_Blocked_End = 0.0
+    No_Well_Count = No_Well_Count + 1
+  Else 'Case of well defined well; process shoulders of well to determine diffuse blocked
+    I = Center_Index - Well_Width
+    Band_Blocked_Start = (ZZ(I - 1) + 2 * ZZ(I) + ZZ(I + 1)) / 4.
+    I = Center_Index + Well_Width
+    Band_Blocked_End = (ZZ(I - 1) + 2 * ZZ(I) + ZZ(I + 1)) / 4
+    Band_Blocked = 0.5 * (Band_Blocked_Start + Band_Blocked_End)
+    If Band_Blocked > Global_Raw Then Band_Blocked = Global_Raw
+    I = Center_Index
+    Diffuse_Raw = (ZZ(I - 1) + 2 * ZZ(I) + ZZ(I + 1)) / 4 'Average three samples centered in the well
+    Diffuse_Raw = Diffuse_Raw + Global_Raw - Band_Blocked 'Add back the diffuse blocked by the band
+  EndIf
+  
+  SweepOffset = Center_Index - 50
+  If SweepOffset < 1 Then SweepOffset = 1
+  If SweepOffset > 1280 - 100 Then SweepOffset = 1280 - 100
+  For I = 1 To 100
+    SweepCenter(I) = ZZ(I + SweepOffset - 1)
+  Next I
+  CallTable(SweepRaw)
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub RawScreen
+  '	Preliminary calculation of (raw) direct normal irradiance
+  '	First check and reset small negative values
+  If Global_Raw > -10.0 AND Global_Raw < 0.0 Then
+    Global_Raw = 0.0
+    Diffuse_Raw = 0.0
+    Direct_Raw = 0.0
+  EndIf
+  If Diffuse_Raw > Global_Raw Then Diffuse_Raw = Global_Raw 'Not possible, set equal
+  If SunUp  Then 'Lower limb of sun above horizon
+    Direct_Raw = (Global_Raw - Diffuse_Raw) / CosZen
+  Else
+    Direct_Raw = 0.0
+    Diffuse_Raw = Global_Raw
+  EndIf
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Reduce(reduce_sweep(1280) As Float)
+  Dim reduce_minspa(2)
+  Dim reduce_begin As Long, reduce_end As Long, reduce_i As Long
+  Dim reduce_deriv As Float
+  Dim reduce_deriv_min As Float, reduce_deriv_min_pos As Long
+  Dim reduce_deriv_max As Float, reduce_deriv_max_pos As Long
+  MinSpa(reduce_minspa, 1280, reduce_sweep(1))
+  minpos = reduce_minspa(2)
+  ' Derivative window is minimum +/- 50, constrained so as the kernel fits.
+  reduce_begin = reduce_minspa(2) - 50
+  If reduce_begin < (1 + 4) Then
+    reduce_begin = 1 + 4
+  EndIf
+  reduce_end = reduce_minspa(2) + 50
+  If reduce_end > (1280 - 4) Then
+    reduce_end = 1280 - 4
+  EndIf
+  reduce_deriv_max_pos = -1
+  reduce_deriv_min_pos = -1
+  For reduce_i = reduce_begin To reduce_end
+    ' Compute the derivative using a 9 sample gaussian kernel.
+    reduce_deriv =                8 * (reduce_sweep(reduce_i + 1) - reduce_sweep(reduce_i - 1))
+    reduce_deriv = reduce_deriv + 9 * (reduce_sweep(reduce_i + 2) - reduce_sweep(reduce_i - 2))
+    reduce_deriv = reduce_deriv + 5 * (reduce_sweep(reduce_i + 3) - reduce_sweep(reduce_i - 3))
+    reduce_deriv = reduce_deriv + 2 * (reduce_sweep(reduce_i + 4) - reduce_sweep(reduce_i - 4))
+    ' Uses >= and < so it's symmetric.
+    If reduce_deriv_max_pos < 0 OR reduce_deriv >= reduce_deriv_max Then
+      reduce_deriv_max = reduce_deriv
+      reduce_deriv_max_pos = reduce_i
+    EndIf
+    If reduce_deriv_min_pos < 0 OR reduce_deriv < reduce_deriv_min Then
+      reduce_deriv_min = reduce_deriv
+      reduce_deriv_min_pos = reduce_i
+    EndIf
+  Next reduce_i
+  Center_Index = Round((reduce_deriv_max_pos + reduce_deriv_min_pos) / 2, 0)
+  Well_Width = Round(reduce_deriv_max_pos - reduce_deriv_min_pos,0)
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Corrections 'Changed to use corrected global in the diffuse corrections 2/5/2013 ECK
+  Public FA, FB, FC, PyrTemp_C, PyrTempRise_C, Global_Corr, FAVg
+  '	Use empirical formula for pyranometer sensor temperature rise above ambient air
+  PyrTempRise_C = -4.883e-6 * Global_Raw ^ 2 + 9.530e-3 * Global_Raw - 0.5
+  PyrTemp_C = AirTemp + PyrTempRise_C
+  'Temperature of pyranometer sensor used in corrections
+  Global_Corr = (1 - 8.2E-4 * (PyrTemp_C - 25)) / (FA * FB * FC)
+  Global = Global_Raw * Global_Corr
+  If LiCor_2_Exists Then Global_2 = Global_Raw_2 * Global_Corr
+  ' Vignola Diffuse Correction
+  Diffuse = Diffuse_Raw + 6.7987e-2 * Global _
+  - 6.9924e-5 * Global ^ 2 _
+  + 2.9839e-8 * Global ^ 3 _
+  - 1.0e-13   * Global ^ 4
+  If Diffuse > Global Then Diffuse = Global
+  If SunUp Then
+    Direct = (Global - Diffuse) / CosZen
+  Else
+    Direct = 0.0
+  EndIf
+  ' Apply FD corrections based on field calibration with pyrheliometer
+  Direct = FD_c * Direct  'FD correction on DNI
+  Diffuse = FD_c * Diffuse  'FD correction to diffuse
+  Global = FD_c * Global  'FD correction to global
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Factors
+  ' Global correction for King temperature and AirMass effects
+  ' and Augustyn "Cat Ear" effect on Licor sensor
+  If ZenDeg > 90 Then
+    FA = 1.0
+    FB = 1.0
+    FC = 1.0
+  Else
+    FA = 2.631E-4 * AirMass ^ 3 - 6.319E-3 * AirMass ^ 2 + 5.401E-2 * AirMass + 0.932
+    FAVg = 0.061 * LN(AirMass) + 0.9771 'Vignola revised AirMass correction factor
+    FB = 1 + 6.074E-4 * (90 - ElDeg) + 1.357E-5 * (90 - ElDeg) ^ 2 - 4.504E-7 * (90 - ElDeg) ^ 3
+    
+    If (ZenDeg < 75 OR ZenDeg > 83.2) Then
+      FC = 1.0
+    ElseIf (ZenDeg >= 75.0 AND ZenDeg < 81.0) Then
+      FC = 10.164664 - 0.24242 * ZenDeg + 1.603e-3 * ZenDeg ^ 2
+    Else
+      FC = -58.03442 + 1.457577 * ZenDeg - 8.990E-3 * ZenDeg ^ 2
+    EndIf
+  EndIf
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Calibrate
+  Public DNI_TS_Last,Direct_LPF
+  Public FD_Sample,Sum_FD,SumSq_FD,N_FD,FD_Mean,FD_StD,SkyStability
+  CLR = 100 * Diffuse / Global 'Compute clearness ratio
+  SkyStability = 100 * (DNI_TS_Last - DNI_TS) / DNI_TS_Last
+  DNI_TS_Last = DNI_TS
+  Direct_LPF = A0 * Direct + B1 * Direct_LPF
+  FD_Sample = DNI_TS / Direct_LPF / FD_c 'Must divide by old FD to get new FD
+  N_FD = N_FD + 1
+  Sum_FD = Sum_FD + FD_Sample
+  SumSq_FD = SumSq_FD + FD_Sample ^ 2
+  FD_Mean = Sum_FD / N_FD
+  If N_FD > 1 Then FD_StD = SQR((SumSq_FD - N_FD * FD_Mean ^ 2) / (N_FD - 1))
+  CallTable Calib
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub WXT520Init
+  Dim dest
+  Dim s As String *30
+  ' SDI-12 Settings.  R=ContinuousMode.
+  SDI12Recorder(dest, PortWXT520_c, SDI12AddrWXT520_c, "XXU,M=R!", 1, 0)
+  ' Note: The four R= configurations here define, in this order, what fields
+  ' will be sent for the "RC!" command.  If any of them are changed, the size
+  ' and aliases of the WXT520 output array should also be changed.
+  ' Note that only the second eight bits matter; they define the "RC" output.
+  ' Wind Settings:
+  ' Requested=DirectionAverage,SpeedAverage,SpeedMaximum
+  SDI12Recorder(dest, PortWXT520_c, SDI12AddrWXT520_c, "XWU,R=0100110001001100!", 1, 0)
+  ' Interval/Average=SlowScan_c DirOffset=0 Gust=3 Units=Metric Freq=1
+  s = "XWU,I=" + SlowScan_c + ",A=" + SlowScan_c + ",D=0,G=3,U=M,F=1!"
+  SDI12Recorder(dest, PortWXT520_c, SDI12AddrWXT520_c, s, 1, 0)
+  ' Pressure/Temperature/Humidity Settings:
+  ' Requested=Pressure,Temperature,Humidity
+  SDI12Recorder(dest, PortWXT520_c, SDI12AddrWXT520_c, "XTU,R=1101000011010000!", 1, 0)
+  ' Interval=SlowScan_c Pressure=H(hPa) Temp=DegreesC.
+  s = "XTU,I=" + SlowScan_c + ",P=H,T=C!"
+  SDI12Recorder(dest, PortWXT520_c, SDI12AddrWXT520_c, s, 1, 0)
+  ' Precipitation Settings:
+  ' Requested=RainAmount,HailAmount
+  SDI12Recorder(dest, PortWXT520_c, SDI12AddrWXT520_c, "XRU,R=1001000010010000!", 1, 0)
+  ' Units(rain)=mm Units(hail)=hits/cm^2 M=TippingBucket Reset=Automatic.
+  SDI12Recorder(dest, PortWXT520_c, SDI12AddrWXT520_c, "XRU,U=M,S=M,M=C,Z=A!", 1, 0)
+  ' Supervisor Settings:
+  ' Requested=<none> Heating=Off.
+  SDI12Recorder(dest, PortWXT520_c, SDI12AddrWXT520_c, "XSU,R=0000000000000000,H=N!", 1, 0)
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub WXT520Poll
+  SDI12Recorder(WXT520, PortWXT520_c, SDI12AddrWXT520_c, "RC!", 1, 0)
+  ' These are total quantities and should be integrated each time "RC!" is run.
+  Rain_Accum = Rain_Accum + Rain
+  Hail_Accum = Hail_Accum + Hail
+  ' Adjust these from X/SlowScan_c to X/Scan_c since they are totalized every Scan_c.
+  Rain = Rain * (Scan_c / SlowScan_c)
+  Hail = Hail * (Scan_c / SlowScan_c)
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Reset
+  Rot_Count = 0 'reset daily counters and set special application flags False
+  Low_Volt_Count = 0
+  No_Well_Count = 0
+  Rain_Accum = 0
+  Hail_Accum = 0
+  Cleaning = False
+  CalibMode = False
+  SweepData = False
+EndSub
+'================================ END PROTECTED CODE =====================================
+'	Main Program
+BeginProg
+  'Initialization in multiple steps
+  Start_Sequence = True
+  PortSet(ComPowerPort_c,1)
+  Delay(1, 5, Sec)
+  AirTemp = 20 'This initializes the air temperature to 20 C as a reasonable value
+  RH = RH_c 'Set RH to an average value for stations without humidity measurement
+  Lat = Lat_c 'Initialize position and altitude with user setup values
+  Lon = Lon_c
+  Alt = Alt_c
+  Call Time_Location_SunPos 'Start using GPS to set time and place
+  Call Factors 'Compute correction factors that depend only on solar position
+  Battery(Batt_Volt)
+  ConfigError = False
+  'Perform configuration error checks
+  If Weather_Type_c = 1 AND Temp_Type_c = 1 Then
+    ConfigError = True
+  EndIf
+  SetSecurity(Security1_c, Security2_c, Security3_c)
+  'Preliminary Setup and assignment of variable names to site constants
+  If Weather_Type_c = 1 Then Call WXT520Init 'Initialize the WXT520
+  Call Reset
+  LiCor_Cal = -(1000. / LiCor_Ohm_c) * LiCor_Mult_c
+  LiCor_Cal2 = -(1000. / LiCor2_Ohm_c) * LiCor2_Mult_c
+  GHI_TS_SN = GHI_TS_SN_c
+  GHI_TS_Cal = GHI_TS_Cal_c
+  DNI_TS_SN = DNI_TS_SN_c
+  DNI_TS_Cal = DNI_TS_Cal_c
+  If GHI_TS_Cal <> 0.0 Then GHI_TS_Exists = True Else GHI_TS_Exists = False
+  If DNI_TS_Cal <> 0.0 Then DNI_TS_Exists = True Else DNI_TS_Exists = False
+  If LiCor2_Mult_c <> 0.0 Then LiCor_2_Exists = True Else LiCor_2_Exists = False
+  B1 = EXP(-1 / (DNI_TS_TimeConst_c / Scan_c)) ' Set up recursive filter to mimic
+  A0 = 1 - B1 'pyrheliometer response lag in calibration routine
+  CleanScans = CleanTime_c / Scan_c
+  Rot_Count = 0
+  No_Well_Count = 0
+  Low_Volt_Count = 0
+  CalibMode = 0  'This variable is is for initialization of the Calibration SubRoutine
+  If Weather_Type_c = 1 Then Call WXT520Poll 'Use WXT520 for weather measurements
+  If Temp_Type_c = 1 AND NOT (Weather_Type_c = 1) Then 'Default to WXT520 if both exist
+    SDI12Recorder (CS215(), PortSDI12_c,"0", "M!", 1.0, 0)  '	CS215 Temp/RH measurement
+    AirTemp = CS215(1)
+    RH = CS215(2)
+  EndIf
+  Press_Ref = StdPressure * EXP(-0.029 * 9.8 * Alt / (8.314 * (20 + 273)))
+  '	This variable is the Standard Atmosphere at 20 C at site altitude (m)
+  Press = Press_Ref 'This initializes the pressure to a reasonable value
+  '	This is needed for the first 15 minutes of operation before a pressure
+  '	measurement is made (i.e., when Pressure_Measured = True)
+  ' Initialize irradiance values
+  #If ComPortCS120_c
+    Call CS120Init
+  #EndIf
+  Delay(1, 5, Sec)
+  VoltSe(Global_Raw, 1, mV25, SEChanPrimary_c, False, 0, 250, LiCor_Cal, 0)
+  Call Rotation
+  Call RawScreen
+  Call Corrections
+  Start_Sequence = False
+  '=======================================================================================
+  '=======================================================================================
+  Scan(Scan_c, Sec, 1, 0) 'Constant 3 or 5 second scan time for main program
+    '=====================================================================================
+    Rotation_this_Scan = False 'Used to keep track of no_well rotations
+    'SW12 power to barometer and cellular modem 10 minutes on each hour and half hour
+
+    If ComPower_c = 0 Then	' Daily Power Cycle
+      If TimeIntoInterval(MidnightMin_c+6,1440,Min) Then PortSet(ComPowerPort_c,0) 'Turn off 6 minutes after midnight
+      If TimeIntoInterval(MidnightMin_c+7,1440,Min) Then PortSet(ComPowerPort_c,1) 'Turn on 7 minutes after midnight
+    ElseIf ComPower_c = 1 Then ' Turn on only for 10-minutes each half hour
+      If TimeIntoInterval(25,30,Min) Then PortSet(ComPowerPort_c,1) 'Turn on 5 minutes before
+      If TimeIntoInterval(5,30,Min)  Then	PortSet(ComPowerPort_c,0) 'Turn off 5 minutes after
+    EndIf
+
+    PulseCount(Pulse2, 1, 2, 2, 0, 1, 0) 'Watch for switch closure requesting cleaning event
+    If AirTemp < 0.0 Then Freeze = True Else Freeze = False
+    If Pulse2 > 0 AND NOT Cleaning Then CleanRequest = True
+    If CleanRequest Then 'Start cleaning sequence
+      'Measured Global before cleaning
+      VoltSe (Pre_Clean, 1, mV25, SEChanPrimary_c, False, 0, 250, LiCor_Cal, 0)
+      CleanCount = -1
+      Cleaning = True
+      CleanRequest = False
+    EndIf
+    If Cleaning Then
+      CleanCount = CleanCount + 1
+      If CleanCount >= CleanScans Then
+        'Measure Global post cleaning
+        VoltSe(Post_Clean, 1, mV25, SEChanPrimary_c, False, 0, 250, LiCor_Cal, 0)
+        Cleaning = False
+        CallTable _Clean
+      EndIf
+    EndIf
+    '=====================================================================================
+    If NOT Cleaning Then 'Start of routine measurment code (not cleaning)
+      'Primary measurement of RSR2 global irradiance and thermopiles
+      'Measured Global Primary
+      VoltSe(Global_Raw, 1, mV25, SEChanPrimary_c, False, 0, 250, LiCor_Cal, 0)
+      'Additional irradiance sensors
+      If LiCor_2_Exists Then
+        'Measured Global Secondary
+        VoltSe (Global_Raw_2, 1, mV25, SEChanSecondary_c, False, 0, 250, LiCor_Cal2, 0)
+      EndIf
+      If GHI_TS_Exists Then 'If there is a thermopile pyranometer
+        VoltSe(GHI_TS, 1, mV25, SEChanRefPyranometer_c, False, 0, 250, GHI_TS_Cal, 0)
+      EndIf
+      If DNI_TS_Exists Then 'Measure thermopile pyrheliometer
+        VoltSe(DNI_TS, 1, mV25, SEChanRefPyrheliometer_c, False, 0, 250, DNI_TS_Cal, 0)
+      EndIf
+      '	Code to detect rapid sunlight change and trigger an extra band rotation
+      If ABS(Global_Raw - Global_Prior_Scan) > 20 Then Global_Ramping = True
+      ' Update diffuse measurement as needed
+      If SunUp AND (CalibMode OR Global_Ramping OR ThreeSecondData_c OR TimeIntoInterval(0, 30, Sec)) Then
+        Call Rotation	'Rotate to measure diffuse sunlight
+      Else
+        Global = Global_Raw * Global_Corr
+        Global_2 = Global_Raw_2 * Global_Corr
+      EndIf
+      If NOT(SunUp) AND TimeIntoInterval(0, 30, Min) AND Freeze Then
+        'Exercise band at night when cold
+        Rotation_State = NOT Rotation_State
+        Rot_Count = Rot_Count + 1
+        PortSet(PortBandControl_c, Rotation_State)
+      EndIf
+      Call RawScreen
+      Call Corrections  'Make corrections to RSR measurements
+      'Mechanical wind sensors
+      If Wind_Type_c <> 0 Then
+        PulseCount(WSpd, 1, 1, Wind_Type_c, 1, 1, 0)
+        Call Wind_Measurement
+      EndIf
+      'Tipping bucket rain guage (GPS not present)
+      #If GPS_c = 0 AND Rain_type_c = 1 Then
+        PulseCount(Rain,1,TippingBucket_c,2,0,0.254,0)
+        Rain_Accum = Rain_Accum + Rain 'Accumulated rain so far for the day
+      #EndIf
+      If CalibMode Then
+        Call Calibrate  'Run onsite calibration code
+      Else
+        N_FD = 0.0
+        Sum_FD = 0.0
+        SumSq_FD = 0.0
+        DNI_TS_Last = 0.0
+      EndIf
+      Global_Energy  = Global  * Scan_c / (60 *60 * 1000) 'Converts to kwh/m2 for daily record
+      Direct_Energy  = Direct  * Scan_c / (60 *60 * 1000) 'Converts to kwh/m2 for daily record
+      Diffuse_Energy = Diffuse * Scan_c / (60 *60 * 1000) 'Converts to kwh/m2 for daily record
+    EndIf 'End of routine measurment code (not cleaning)
+    
+    #If ThreeSecondData_c Then 
+    CallTable _03_Second
+    #EndIf
+
+    CallTable SweepData    
+    CallTable _01_Min
+    CallTable _01_Hour
+    CallTable _01_Day
+  NextScan
+  SlowSequence
+  Scan(SlowScan_c, Sec, 3, 0)
+    Call Time_Location_SunPos
+    Battery(Batt_Volt)
+    PanelTemp(Panel_Temp, 250)
+    If Weather_Type_c = 1 Then Call WXT520Poll
+    If Temp_Type_c = 1 AND NOT (Weather_Type_c = 1) Then
+      '	CS215 Temp/RH Probe only if no WXT520
+      SDI12Recorder (CS215(), PortSDI12_c, "0", "M!", 1.0, 0)
+      AirTemp = CS215(1)
+      RH = CS215(2)
+    ElseIf Temp_Type_c = 0 AND NOT (Weather_Type_c = 1) Then
+      AirTemp = Panel_Temp
+      RH = RH_c
+    EndIf
+    If TimeIntoInterval(29, 30, Min) OR (ComPower_c = 0 AND TimeIntoInterval(4, 5, Min))  Then
+      If Press_Type_c=1  Then
+        VoltSe(Press, 1, mV2500, SEChanPress_c, 1, 0, 250, 0.24, 500)
+      ElseIf Press_Type_c = 2 Then 'SETRA 276 Barometer (600-1100 mBar range; 100-5100mV out)
+        VoltSe(Press, 1, mV5000, SEChanPress_c, True, 0, 250, 0.1, 590) 'Setra 276
+      ElseIf Press_Type_c = 3 Then 'SETRA 278 Barometer (600-1100 mBar range; 0-2500 mV out)
+        VoltSe(Press, 1, mV2500, SEChanPress_c, True, 0, 250, 0.20, 600)
+      EndIf
+    EndIf
+    Call Factors 'Compute correction factors that depend only on solar position
+    'Code to reset time and daily counters just after local midnight
+    If TimeIntoInterval(MidnightMin_c, 1440, Min) Then
+      Call Reset
+    EndIf
+    #If ComPortCS120_c
+      Call CS120Poll
+      If RH < 80 AND CS120ConfDewHeat = 0 Then
+        CS120ConfDewHeat = 1
+        Call CS120SetNCConfig
+      ElseIf RH > 80 AND CS120ConfDewHeat = 1 Then
+        CS120ConfDewHeat = 0
+        Call CS120SetNCConfig
+      EndIf
+    #EndIf
+  NextScan
+EndProg

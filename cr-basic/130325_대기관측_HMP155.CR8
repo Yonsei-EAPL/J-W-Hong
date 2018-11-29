@@ -1,0 +1,55 @@
+'120308 JWHong for ELP
+'130325 JWHong for Atmospheric Measurement Class (2013) in Yonsei
+'140331 JWHong for Atmospheric Measurement Class (2014) in Yonsei
+
+'HMP155 Wiring (Campbell Scientific)
+'  T_air - diff1 - yellow
+'  RH  - diff2 - blue
+'  Signal Reference - white (JUMP)
+'  12VDC(power) - red 
+'  Signal Ground(power) - black
+'  Shield - clear
+
+'Declare Variables and Units
+Public BattVolt
+Public RH, T_air
+Public rTime(9)	
+Alias rTime(1) = Year	
+Alias rTime(2) = Month	
+Alias rTime(3) = Day_	
+Alias rTime(4) = Hour	
+Alias rTime(5) = Minute
+Alias rTime(6) = Second	
+Alias rTime(7) = uSecond	
+Alias rTime(8) = WeekDay	
+Alias rTime(9) = Day_of_Year	
+Public YYMMDD, HHMMSS
+Units BattVolt=Volts
+Units RH=%
+Units T_air=degree C
+
+'Define Data Tables
+DataTable(data_sec,True,-1)
+  OpenInterval
+  DataInterval(0,1,SEC,24)
+  Sample(1,YYMMDD,IEEE4)
+  Sample(1,HHMMSS,IEEE4)
+  'HMP155
+  Sample(1,RH,FP2)
+  Sample(1,T_air,FP2)
+  Minimum(1,BattVolt,FP2,False,False)
+EndTable
+
+'Main Program
+BeginProg
+  Scan(1,Sec,1,0)
+    RealTime (rTime)
+    Battery (BattVolt)
+    YYMMDD = ( Year - 2000 ) * 10000 + Month * 100 + Day_
+    HHMMSS = Hour * 10000 + Minute * 100 +Second
+  	'HMP155
+  	VoltDiff(T_air,1,mV2500,1,True,0,_60Hz,0.14,-80)
+    VoltDiff(RH,1,mv2500,2,True,0,_60Hz,0.1,0)
+    CallTable(data_sec)
+  NextScan
+EndProg

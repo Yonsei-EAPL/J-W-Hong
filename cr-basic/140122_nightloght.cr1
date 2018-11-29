@@ -1,0 +1,70 @@
+'CR1000 Series Datalogger
+
+'History
+'2013-05-30, J-W Hong, for Li-190SB-L
+'2014-01-22, J-W Hong, for Urban Night-Light Measurements
+
+'Wiring Information
+'Li190SB-L 1st : diff1,red(H),black(L),clear(shield)
+'Li190SB-L 2nd : diff2,red(H),black(L),clear(shield)
+'HMP155 : diff5, yellow(H), White(L)
+'         diff6, blue(H), jump from diff5-L
+'         red(12V DC)
+'         black(ground)
+'         clear(sheild)
+
+'Declare Variables and Units
+Public Logger_V, Logger_T
+Public T_air, RH_air
+Public Li190_1, Li190_2
+Public rTime(9)	'declare as public and dimension rTime to 9
+Alias rTime(1) = Year	'assign the alias Year to rTime(1)
+Alias rTime(2) = Month	'assign the alias Month to rTime(2)
+Alias rTime(3) = Day_	'assign the alias Day to rTime(3)
+Alias rTime(4) = Hour	'assign the alias Hour to rTime(4)
+Alias rTime(5) = Minute	'assign the alias Minute to rTime(5)
+Alias rTime(6) = Second	'assign the alias Second to rTime(6)
+Alias rTime(7) = uSecond	'assign the alias uSecond to rTime(7)
+Alias rTime(8) = WeekDay	'assign the alias WeekDay to rTime(8)
+Alias rTime(9) = Day_of_Year	'assign the alias Day_of_Year to rTime(9)
+Public YYMMDD, HHMMSS
+
+'Define Data Tables
+DataTable(data_sec,True,-1)
+  OpenInterval
+  DataInterval(0,1,sec,0)
+
+  Sample(1,YYMMDD,IEEE4)
+  Sample(1,HHMMSS,IEEE4)  
+  
+  Average(1,Li190_1,FP2,False) 'unit : umol s-1 m-2
+  Average(1,Li190_2,FP2,False) 'unit : umol s-1 m-2
+  Average(1,T_air,FP2,False) 'unit : degreeC
+  Average(1,RH_air,FP2,False) 'unit : %
+  Average(1,Logger_V,FP2,False) 'unit : V
+  Average(1,Logger_T,FP2,False) 'unit : degreeC
+
+EndTable
+
+
+'Main Program
+BeginProg
+  Scan(1,Sec,1000,0)
+    RealTime (rTime)
+    YYMMDD = ( Year - 2000 ) * 10000 + Month * 100 + Day_
+    HHMMSS = Hour * 10000 + Minute * 100 +Second
+        
+    Battery (Logger_V)
+    PanelTemp (Logger_T,_60Hz)
+
+    'Li190SB-L
+    VoltDiff (Li190_1,1,mV25,1,True ,0,_60Hz,1000/3.02,0)
+    'Li190SB-L
+    VoltDiff (Li190_2,1,mV25,2,True ,0,_60Hz,1000/3.02,0)
+  	'HMP155
+  	VoltDiff(T_air,1,mV2500,5,True,0,_60Hz,0.14,-80)
+    VoltDiff(RH_air,1,mv2500,6,True,0,_60Hz,0.1,0)
+        
+    CallTable(data_sec)
+  NextScan
+EndProg

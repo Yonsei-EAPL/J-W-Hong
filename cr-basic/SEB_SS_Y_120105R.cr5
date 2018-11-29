@@ -1,0 +1,1061 @@
+'CR5000 Series Datalogger
+
+'Copyright (c) 2002 Campbell Scientific, Inc. All rights reserved.
+
+'1 January 05
+'version 2.0
+
+'Modified by Kang 28 April 08
+
+
+' This CR5000 program measures turbulence sensors at 10 or 20 Hz.  The time series
+'can be saved to a card.  The CR5000 will also compute online turbulent fluxes
+'from the measured data.  The flux table saves all the cross products that are
+'required to rotate the online fluxes into natural wind coordinates in post
+'processing as described in:
+'
+' Kaimal, J. C. and Finnigan, J. J.: 1994, Atmospheric Boundary Layer Flows, Their
+'   Structure and Measurement, Oxford University Press, New York, 289 pages.
+'
+' Tanner, C. B. and Thurtell, G . W.: 1969, Anemoclinometer measurements of reynolds
+'   stress and heat transport in the atmospheric surface layer, Final Report, United
+'   States Army Electronics Command, Atmospheric Sciences Laboratory, Fort Huachuca,
+'   Arizona.
+
+
+'The following sensors are measured:
+'
+'RMY81000	three dimensional sonic anemometer
+'FW05		type E fine wire (0.005 inch diameter) thermocouple
+'KH20		open path krypton hygrometer (h2o)
+'HMP45C		temperature and relative humidity probe
+'NRLite		net radiometer
+
+'////////////////////////////////////////////////////////////////////////////////////
+'HFP01SC		soil heat flux plates (four sensors)
+'TCAV		type E thermocouple averaging soil temperature probes (two sensors)
+'cs615		water content reflectometer (volumetric soil moisture)(two sensors)
+'///////////////////////////////////////////////////////////////////////////////////
+
+
+' The sign convention for the fluxes, except net radiation, is positive away from the
+'surface and negative toward the surface.
+'
+' The CR5000 will introduce delays into the CSAT3, KH20, FW05, and CR5000 Panel
+'Temperature data so that all measurements are aligned in time.  The lags are a
+'function of the Scan Interval and are computed automatically by the program.
+'
+' The site attendant must load in several constants and calibration values.  Search
+'for the text string "unique" to find the locations where unique constants and
+'calibration values are entered.
+
+
+'*** Unit Definitions ***
+
+'Units	Units
+'C		Celsius
+'degrees	degrees (angle)
+'g		grams
+'J		Joules
+'kg		kilograms
+'kPa		kilopascals
+'ln_mV	ln(mV)	(natural log of the KH20 millivolts)
+'m		meters
+'uSeconds	microseconds
+'mV		millivolts
+'s		seconds
+'V		volts
+'W		Watts
+
+
+'*** Program Control Flags ***
+
+' The Program Control Menu allows the station operator to conveniently change the
+'status of the program control Flags using the CR5000 keyboard display.
+
+'Save Fluxes?			"Yes" (default) process flux data.
+'{save_flx_flag_on}		"No" do not process flux data.
+'
+'Save Time Series?		"Yes" (default) save time series data.
+'{save_ts_flag_on}		"No" stop collecting time series data.
+
+
+'*** Wiring ***
+
+'SDM INPUT
+'SDM-C1	CSAT3 SDM Data (green)
+'SDM-C2	CSAT3 SDM Clock (white)
+'SDM-C3	CSAT3 SDM Enable (brown)
+'G		CSAT3 SDM reference (black)
+'		CSAT3 SDM shield (clear)
+
+
+'ANALOG INPUT
+'1H		KH20 signal (white)
+'1L		KH20 signal reference (black)
+'gnd		KH20 shield (clear)
+
+'DIFF 2,3,4,5 for RMY81000
+'2H yellow
+'3H green
+'4H bule
+'5H brown
+'5L grey
+'2L,3L,4L short jumper wire to 5L
+
+'6H		FW05 signal (purple)
+'6L		FW05 signal reference (red)
+'gnd		FW05 shield (clear)
+
+'////////////////////////////////////////////////////////////////////////////////////
+'7H		cs615_1 signal (green)
+'7L		cs615_2 signal (green)
+'////////////////////////////////////////////////////////////////////////////////////
+
+'////////////////////////////////////////////////////////////////////////////////////
+'8H NRLite signal (white) 
+'8L NRLite signal reference (green) 
+'gnd short jumper wire to 8L 
+' NRLite shield (clear)
+
+'9H		HMP45C temperature signal (yellow)
+'9L		HMP45C signal reference (white)
+'gnd		HMP45C shield (clear)		
+
+'10H		HMP45C relative humidity signal (blue)
+'10L		short jumper wire to 9L
+'////////////////////////////////////////////////////////////////////////////////////
+
+'////////////////////////////////////////////////////////////////////////////////////
+'11 to 16 Type T (copper-constantan) Thermocouple for bole temperature
+'blue H, red L
+
+
+'////////////////////////////////////////////////////////////////////////////////////
+'11H		HFP01SC_1 signal (white)
+'11L		HFP01SC_1 signal reference (green)
+'gnd		HFT01SC_1 shield (clear)
+
+'12H		HFP01SC_2 signal (white)
+'12L		HFP01SC_2 signal reference (green)
+'gnd		HFT01SC_2 shield (clear)
+
+'13H		HFP01SC_3 signal (white)
+'13L		HFP01SC_3 signal reference (green)
+'gnd		HFT01SC_3 shield (clear)
+
+'14H		HFP01SC_4 signal (white)
+'14L		HFP01SC_4 signal reference (green)
+'gnd		HFT01SC_4 shield (clear)
+
+'15H		TCAV_1 signal (purple)
+'15L		TCAV_1 signal reference (red)
+'gnd		TCAV_1 shield (clear)
+
+'16H		TCAV_2 signal (purple)
+'16L		TCAV_2 signal reference (red)
+'gnd		TCAV_2 shield (clear)
+
+'17H		HFP01SC_1 heater resistor signal (yellow)
+'17L		HFP01SC_1 heater resistor signal reference (purple)
+'gnd		HFP01SC_1 heater shield (clear)
+
+'18H		HFP01SC_2 heater resistor signal (yellow)
+'18L		HFP01SC_2 heater resistor signal reference (purple)
+'gnd		HFP01SC_2 heater shield (clear)
+
+'19H		HFP01SC_3 heater resistor signal (yellow)
+'19L		HFP01SC_3 heater resistor signal reference (purple)
+'gnd		HFP01SC_3 heater shield (clear)
+
+'20H		HFP01SC_4 heater resistor signal (yellow)
+'20L		HFP01SC_4 heater resistor signal reference (purple)
+'gnd		HFP01SC_4 heater shield (clear)
+'////////////////////////////////////////////////////////////////////////////////////
+
+'CS105 Barometric Pressure Sensor
+'17H:  Blue (Brown)
+'Ground:  Yellow (White)
+'G:  Clear
+'G:  Black
+'12V:  Red
+'C1:  Green
+
+'////////////////////////////////////////////////////////////////////////////////////
+'CONTROL PORT
+'C1		cs615_1 power control (orange)
+'		cs615_2 power control (orange)
+'G		cs615_1 shield (clear)
+'		cs615_2 shield (clear)
+'////////////////////////////////////////////////////////////////////////////////////
+
+'POWER OUT
+'12V		HMP45C power (red)
+'		cs615_1 power (red)
+'		cs615_2 power (red)
+'G		HMP45C power reference (black)
+'		cs615_1 signal reference (black)
+'		cs615_2 signal reference (black)
+'SW12	HFP01SC_1 heater (red)
+'		HFP01SC_2 heater (red)
+'		HFP01SC_3 heater (red)
+'		HFP01SC_4 heater (red)
+'G		HFP01SC_1 heater reference (black)
+'		HFP01SC_2 heater reference (black)
+'		HFP01SC_3 heater reference (black)
+'		HFP01SC_4 heater reference (black)
+
+
+'POWER IN
+'12V		CR5000 (red)
+'G		CR5000 (black)
+
+
+'EXTERNAL POWER SUPPLY
+'POS		CSAT3 power (red)
+'		KH20 power (red)
+'		CR5000 (red)
+'NEG		CSAT3 power reference (black)
+'		CSAT3 power shield (clear)
+'		KH20 power signal (black)
+'		KH20 power shield (clear)
+'		CR5000 (black)
+
+
+'*** Constants ***
+
+Const CSAT3_AZIMUTH = 90		'Unique value.
+						'Compass azimuth of the -x axis.  For the figure
+						' below, CSAT3_AZIMUTH = 90.
+' () -> Compass coordinate system
+' {} -> Right handed coordinate system aligned to north
+'
+'
+'                                (N)
+'                               {-y}
+'                                |
+'                                |
+'                                |
+'                                |
+'                                |
+'                                |
+'              (W) {+x} --------[ ]----X---> {-x} (E)
+'                              / |      \
+'                    CSAT3 Block |      CSAT3 Transducers
+'                                |
+'                                |
+'                                v
+'                               {+y}
+'                               (S)
+'
+'The program computes the compass wind direction, using the constant
+' CSAT3_AZIMUTH, and a CSAT3 wind direction.  Good CSAT3 wind directions
+' are between -90 to 0 and 0 to 90 degrees, e.g. the wind is blowing into
+' the CSAT3 sensor head.
+
+
+'Measurement Rate			'10 Hz		20 Hz
+Const SCAN_INTERVAL = 50	'100 mSec		50 mSec
+
+'Output period
+Const OUTPUT_INTERVAL = 30	'Online flux data output interval in minutes.
+Const NUM_DAY_CPU = 14		'Number of days of data to store on the CPU.
+Const NUM_DAY_CRD = 28		'Number of days of data to store on the card.
+
+Const OFFSET = 16						'An offset delay that will be introduced to the CSAT3 and analog data.
+Const DELAY_CSAT = 2					'Fixed inherent lag of the CSAT3 data (two scans).
+Const XKW = -0.1755						'Unique path length times absorption coefficent for water vapor [m^3 / g]. s/n 1328
+Const X = 1.142							'Unique path length of the KH20 [cm].
+Const KW = -0.1537						'Unique absorption coefficent for water vapor [m^3 / (g cm)].
+Const PRESS = 98.5						'Unique value for atmospheric pressure (kPa).
+
+'Determine scan buffer size, CSAT3 Execution Parameters and fixed lags for the CSAT3.
+Const SCAN_BUFFER_SIZE = 30*INT (1000/SCAN_INTERVAL)	'Compute a scan buffer that is 30 seconds in length.
+Const CSAT_OPT = INT (1000/SCAN_INTERVAL)			'Compute CSAT3 Exection Parameter (10 or 20 Hz).
+Const CSAT_REC_BCK = OFFSET-DELAY_CSAT				'Number of records back to align CSAT3 data.
+
+'Compute CPU and card storage size for the FLUX DataTables.
+Const FLUX_SIZE_CPU = (NUM_DAY_CPU*1440)/OUTPUT_INTERVAL	'Size of flux DataTable on CPU [days].
+Const FLUX_SIZE_CRD = (NUM_DAY_CRD*1440)/OUTPUT_INTERVAL	'Size of flux DataTable on card [days].
+
+Const NRLITE_CAL = 73 'Unique multiplier for NRLite (1000/sensitivity).
+'Const HFP01SC_CAL_1 = 15			'Unique multiplier for HFP01SC #1 (1000/sensitivity).
+'Const HFP01SC_CAL_2 = 15			'Unique multiplier for HFP01SC #2 (1000/sensitivity).
+'Const HFP01SC_CAL_3 = 15			'Unique multiplier for HFP01SC #3 (1000/sensitivity).
+'Const HFP01SC_CAL_4 = 15			'Unique multiplier for HFP01SC #4 (1000/sensitivity).
+Const CAL_INTERVAL = 1440		'HFP01SC insitu calibration interval (minutes).
+
+Const CP = 1004.67				'Estimate of heat capacity of air [J/(kg K)].
+Const LV = 2440				'Estimate of the latent heat of vaporization [J/g].
+Const SDM_PER = 30				'Default SDM clock speed.
+Const MU_WPL = 29/18			'Ratio of the molecular weight of dry air to that of water vapor.
+Const R = 8.3143e-3				'Universal gas constant [kPa m^3/(K mol) ].
+Const RD = R/29				'Gas constant for dry air [J/(mg K)].
+Const RV = R/18				'Gas constant for water vapor [J/(mg K)].
+Const CO = 0.2095				'Fraction concentration of oxygen in the atmosphere.
+Const MO = 32					'Molecular weight of oxygen [g / mol].
+Const KO = 0.0045				'Absorbtion coefficent for oxygen [m^3 / (g cm)].
+
+Const A_0 = 6.107800			'Coefficients for the sixth order approximating
+Const A_1 = 4.436519e-1			' saturation vapor pressure polynomial (Lowe,
+Const A_2 = 1.428946e-2			' Paul R., 1977.:  An approximating polynomial for
+Const A_3 = 2.650648e-4			' computation of saturation vapor pressure, J.
+Const A_4 = 3.031240e-6			' Appl. Meteor., 16, 100-103).
+Const A_5 = 2.034081e-8
+Const A_6 = 6.136821e-11
+
+'Custom Menu constants.
+Const YES = -1					'Yes is defined as -1 (TRUE).
+Const NO = 0					'No is defined as 0 (FALSE).
+
+
+'*** Variables ***
+
+'Online lagged CSAT3 and analog data. 
+Public aligned_data(12)
+Alias aligned_data(1) = Uz
+Alias aligned_data(2) = Ux
+Alias aligned_data(3) = Uy
+Alias aligned_data(4) = not_used_1
+Alias aligned_data(5) = not_used_2
+Alias aligned_data(6) = ln_kh
+Alias aligned_data(7) = Ts
+Alias aligned_data(8) = fw
+Alias aligned_data(9) = diag_csat
+Alias aligned_data(10) = not_used_3
+Alias aligned_data(11) = not_used_4
+Alias aligned_data(12) = panel_temp
+Units Uz = m/s
+Units Ux = m/s
+Units Uy = m/s
+Units ln_kh = mV
+Units Ts = C
+Units fw = C
+Units diag_csat = unitless
+Units panel_temp = C
+
+
+Public diag_bits(4)				'Warning flags.
+Alias diag_bits(1) = del_T_f		'Delta temperature warning flag.
+Alias diag_bits(2) = sig_lck_f	'Poor signal lock warning flag.
+Alias diag_bits(3) = amp_h_f		'Amplitude high warning flag.
+Alias diag_bits(4) = amp_l_f		'Amplitude low warning flag.
+Units diag_bits = samples
+
+
+'Nonlagged meteorological variables.
+Public hmp(2)				'HMP45C temperature and relative humidity.
+Public e_hmp				'HMP45C vapor pressure.
+Dim h2o_hmp_mean			'Mean HMP45C vapor density.
+Dim rho_a_mean				'Mean air density.
+Public batt_volt			'CR5000 battery voltage.
+Alias hmp(1) = t_hmp
+Alias hmp(2) = rh_hmp
+Units t_hmp = C
+Units rh_hmp = fraction
+Units e_hmp = kPa
+Units h2o_hmp_mean = g/m^3
+Units rho_a_mean = kg/m^3
+Units batt_volt = V
+
+
+'No delay energy balance sensor.
+Public Rn(2)
+Public hor_wind
+'Public shf(4)
+'Public Tsoil(2)
+'Public del_Tsoil(2)
+Public cs615(2)			'Water content reflectometer period.
+Public soil_water_C(2)		'Volumetric soil water content.
+'Public shf_cal(4)
+'Dim prev_Tsoil(2)
+Public T_bole(6)
+Public BP_kPa
+Dim cs615_T(2)				'Water content refectometer period with temperature correction.
+Alias Rn(1) = Rn_meas 
+Alias Rn(2) = Rn_cor 
+'Alias shf(1) = hfp01sc_1
+'Alias shf(2) = hfp01sc_2
+'Alias shf(3) = hfp01sc_3
+'Alias shf(4) = hfp01sc_4
+'Alias Tsoil(1) = tcav_1
+'Alias Tsoil(2) = tcav_2
+Alias T_bole(1) = T_bole_1_1
+Alias T_bole(2) = T_bole_1_2
+Alias T_bole(3) = T_bole_2_1
+Alias T_bole(4) = T_bole_2_2
+Alias T_bole(5) = T_bole_3_1
+Alias T_bole(6) = T_bole_3_2 
+Units Rn = W/m^2
+Units Rn_cor = W/m^2
+'Units shf = W/m^2
+'Units Tsoil = C
+'Units del_Tsoil = C
+Units cs615 = mSeconds
+Units soil_water_C = %_VWC
+'Unit shf_cal = W/(m^2 mV)
+Units T_bole = C
+Units BP_kPa=kPa
+
+'Soil heat flux calibration variables.
+'Dim shf_mV(4)
+'Dim shf_mV_run(4)
+'Dim shf_mV_0(4)
+'Dim shf_mV_180(4)
+'Dim shf_mV_360(4)
+'Dim V_Rf(4)
+'Dim V_Rf_run(4)
+'Dim V_Rf_180(4)
+'Dim shf_cal_on
+
+
+'Flux variables.
+Dim LE_wpl				'Latent heat flux, with oxygen correction and Webb et al. term.
+Dim Hs					'Sensible heat flux using sonic temperature.
+Dim Hc					'Sensible heat flux computed from Hs and LE_wpl.
+Dim H					'Sensible heat flux using the fine wire thermocouple.
+Dim tau					'Momentum flux. 
+Dim u_star				'Friction velocity.
+Dim LE_kh					'Latent heat flux from KH20.
+Dim oc_LE					'Oxygen correction to the KH20 Latent heat flux.
+Dim oc_var				'Oxygen correction to the KH20 variance.
+Dim h2o_wpl_LE				'Latent heat flux, Webb et al. term due to latent heat flux.
+Dim h2o_wpl_H				'Latent heat flux, Webb et al. term due to sensible heat flux.
+Dim cov_out(49)			'Covariances of wind and scalars, wind vector, and t_hmp_mean, e_mean, and Ts_mean.
+Units LE_wpl = W/m^2
+Units Hs = W/m^2
+Units Hc = W/m^2
+Units H = W/m^2
+Units tau = kg/(m s^2)
+Units u_star = m/s
+Units oc_LE = W/m^2
+Units oc_var = (g/m^3)^2
+Units h2o_wpl_LE = W/m^2
+Units h2o_wpl_H = W/m^2
+
+
+'Aliases for covariances.
+Alias cov_out(1) = cov_Uz_Uz
+Alias cov_out(2) = cov_Uz_Ux
+Alias cov_out(3) = cov_Uz_Uy
+Alias cov_out(6) = cov_Uz_h2o
+Alias cov_out(7) = cov_Uz_Ts
+Alias cov_out(9) = cov_Ux_Ux
+Alias cov_out(10) = cov_Ux_Uy
+Alias cov_out(13) = cov_Ux_h2o
+Alias cov_out(14) = cov_Ux_Ts
+Alias cov_out(16) = cov_Uy_Uy
+Alias cov_out(19) = cov_Uy_h2o
+Alias cov_out(20) = cov_Uy_Ts
+Alias cov_out(31) = cov_h2o_h2o
+Alias cov_out(32) = cov_h2o_Ts
+Alias cov_out(34) = cov_Ts_Ts
+Units cov_Uz_Uz = (m/s)^2
+Units cov_Uz_Ux = (m/s)^2
+Units cov_Uz_Uy = (m/s)^2
+Units cov_Uz_h2o = g/(m^2 s)
+Units cov_Uz_Ts = m C/s
+Units cov_Ux_Ux = (m/s)^2
+Units cov_Ux_Uy = (m/s)^2
+Units cov_Ux_h2o = g/(m^2 s)
+Units cov_Ux_Ts = m C/s
+Units cov_Uy_Uy = (m/s)^2
+Units cov_Uy_h2o = g/(m^2 s)
+Units cov_Uy_Ts = m C/s
+Units cov_h2o_h2o = (g/m^3)^2
+Units cov_h2o_Ts = C g/m^3
+Units cov_Ts_Ts = C^2
+
+Alias cov_out(8) = cov_Uz_fw
+Alias cov_out(15) = cov_Ux_fw
+Alias cov_out(21) = cov_Uy_fw
+Alias cov_out(33) = cov_h2o_fw
+Alias cov_out(36) = cov_fw_fw
+Units cov_Uz_fw = m C/s
+Units cov_Ux_fw = m C/s
+Units cov_Uy_fw = m C/s
+Units cov_h2o_fw = C g/m^3
+Units cov_fw_fw = C^2
+
+
+'Wind directions and speed.
+Alias cov_out(39) = wnd_dir_compass
+Alias cov_out(41) = wnd_spd
+Alias cov_out(42) = rslt_wnd_spd
+Alias cov_out(43) = wnd_dir_csat3
+Alias cov_out(44) = std_wnd_dir
+Alias cov_out(45) = t_hmp_mean
+Alias cov_out(46) = e_hmp_mean
+Alias cov_out(47) = Ts_mean
+
+Units wnd_dir_compass = degrees
+Units wnd_spd = m/s
+Units rslt_wnd_spd = m/s
+Units wnd_dir_csat3 = degrees
+Units std_wnd_dir = degrees
+Units t_hmp_mean = C
+Units Ts_mean = C
+
+'Soil temperature mean.
+'Dim Tsoil_avg(2)
+'Units Tsoil_avg = C
+
+
+'Diagnostic variables.
+Dim disable_flag_on(4)			'Intermediate processing disable flags.
+	'disable_flag_on(1)			'TRUE when CSAT3 diagnostic warning flags are on or CSAT3 has no data.
+	'disable_flag_on(3)			'TRUE when CSAT3 diagnostic warning flags are on.
+							' Used to filter the sum of CSAT3 diagnostic warning flags.
+Dim n						'Number of samples in the online covariances.
+Units n = samples
+
+
+'Program Control flags.
+Public save_flx_flag_on
+Public save_ts_flag_on
+
+
+'Nonlagged CSAT3 data.
+Dim wind_raw(5)
+Alias wind_raw(1) = Ux_raw
+Alias wind_raw(2) = Uy_raw
+Alias wind_raw(3) = Uz_raw
+Alias wind_raw(4) = Ts_raw
+Alias wind_raw(5) = diag_csat_raw
+Units wind_raw = m/s
+Units Ts_raw = C
+Units diag_csat_raw = unitless
+
+
+'Nonlagged analog measurements.
+Dim kh_raw
+Dim panel_temp_raw
+Dim fw_raw
+Units kh_raw = mV
+Units panel_temp_raw = C
+Units fw_raw = C
+
+
+'Working variables.
+Dim sigma_wpl					'Webb et al. sigma = density of water vapor / density of dry air.
+Dim j						'Generic counter variable.
+Dim scan_count					'Number scans executed.
+Dim wind_east					'East wind in compass coordinate system.
+Dim wind_north					'North wind in compass coordinate system.
+Dim even_min_flag_on			'Used to synchronize the time series output to the even minute.
+Dim dly_data_out(12)			'Variable used to temporarily store the lagged record.
+Dim place_holder(4)				'Place holder variable in the DataTable dly_data_out.
+Dim one_more_record				'Used to write one more time series record with a file mark.
+Dim rho_d_mean					'Density of dry air used in Webb et al. term.
+Dim e_sat						'Saturation vapor pressure.
+Dim kh						'The LK20 signal.
+'Dim ln_kh						'Natural log of the LK20 signal.
+
+
+
+'*** Final Output Data Tables ***
+
+'Online flux data.
+DataTable (flux,TRUE,FLUX_SIZE_CPU)
+  DataInterval (0,OUTPUT_INTERVAL,Min,10)
+  CardOut (0,-1)
+
+  Sample (1,LE_wpl,IEEE4)
+  Sample (1,Hs,IEEE4)
+  Sample (1,Hc,IEEE4)
+  Sample (1,tau,IEEE4)
+  Sample (1,u_star,IEEE4)
+  Sample (3,cov_Uz_Uz,IEEE4)
+  Sample (2,cov_Uz_h2o,IEEE4)
+  Sample (2,cov_Ux_Ux,IEEE4)
+  Sample (2,cov_Ux_h2o,IEEE4)
+  Sample (1,cov_Uy_Uy,IEEE4)
+  Sample (2,cov_Uy_h2o,IEEE4)
+  Sample (4,cov_h2o_h2o,IEEE4)
+
+  Average (3,Uz,IEEE4,(disable_flag_on OR NOT (save_flx_flag_on))
+  Average (1,kh,IEEE4,NOT (save_flx_flag_on))
+  Sample (1,Ts_mean,IEEE4)
+
+  Sample (1,rho_a_mean,IEEE4)
+  Average (1,panel_temp,IEEE4,FALSE)
+
+  Sample (1,wnd_dir_compass,IEEE4)
+  Sample (1,wnd_dir_csat3,IEEE4)
+  Sample (1,wnd_spd,IEEE4)
+  Sample (1,rslt_wnd_spd,IEEE4)
+  Average (1,batt_volt,IEEE4,FALSE)
+
+  Sample (1,std_wnd_dir,IEEE4)
+
+  Totalize (1,n,IEEE4,disable_flag_on(1) OR disable_flag_on(2) OR NOT (save_flx_flag_on))
+
+  Totalize (1,n,IEEE4,NOT (disable_flag_on(1) XOR disable_flag_on(3)) OR NOT (save_flx_flag_on))
+  FieldNames ("csat_warnings")
+
+  Totalize (4,del_T_f,IEEE4,disable_flag_on(3) OR NOT (save_flx_flag_on))
+
+  Sample (1,LE_kh,IEEE4)
+  Sample (1,h2o_wpl_LE,IEEE4)
+  Sample (1,h2o_wpl_H,IEEE4)
+  Sample (1,oc_LE,IEEE4)
+  Sample (1,oc_var,IEEE4)
+  Sample (1,h2o_hmp_mean,IEEE4)
+  Sample (1,t_hmp_mean,IEEE4)
+
+  Sample (1,H,IEEE4)
+  Sample (1,cov_Uz_fw,IEEE4)
+  Sample (1,cov_Ux_fw,IEEE4)
+  Sample (1,cov_Uy_fw,IEEE4)
+  Sample (1,cov_fw_fw,IEEE4)
+  Average (1,fw,IEEE4,NOT (save_flx_flag_on))
+
+  Average (2,Rn_meas,IEEE4,FALSE)
+'  Average (4,shf(1),IEEE4,shf_cal_on)
+'  Sample (2,del_Tsoil(1),IEEE4)
+  Average (2,soil_water_C(1),IEEE4,FALSE)
+'  Sample (2,Tsoil_avg(1),IEEE4)
+'  Sample (4,shf_cal(1),IEEE4)
+  Average (2,cs615(1),IEEE4,FALSE)
+  Average (6,T_bole(1),IEEE4,FALSE)
+  Sample  (1,BP_kPa,FP2)
+
+EndTable
+
+
+'Set "Save Time Series?" menu option to "Yes" to save time series data.
+DataTable (ts_data,even_min_flag_on,-1)
+  DataInterval (0,SCAN_INTERVAL,mSec,100)
+  CardOut (0,-1)
+
+  Sample (1,Ux,IEEE4)
+  Sample (1,Uy,IEEE4)
+  Sample (1,Uz,IEEE4)
+  Sample (1,kh,IEEE4)
+  Sample (1,Ts,IEEE4)
+  Sample (1,diag_csat,IEEE4)
+  Sample (1,t_hmp,IEEE4)
+  Sample (1,e_hmp,IEEE4)
+  Sample (1,fw,IEEE4)
+  diag_csat=0
+
+EndTable
+
+
+'*** Working Data Tables ***
+
+'Reorder the data and prepare to lag all the data.
+DataTable (dly_data,TRUE,OFFSET)
+
+  Sample (1,Uz_raw,IEEE4)
+  Sample (1,Ux_raw,IEEE4)
+  Sample (1,Uy_raw,IEEE4)
+  Sample (1,place_holder(1),IEEE4)
+  Sample (1,place_holder(2),IEEE4)
+  Sample (1,kh_raw,IEEE4)
+  Sample (1,Ts_raw,IEEE4)
+  Sample (1,fw_raw,IEEE4)
+  Sample (1,diag_csat_raw,IEEE4)
+  Sample (1,place_holder(3),IEEE4)
+  Sample (1,place_holder(4),IEEE4)
+  Sample (1,panel_temp_raw,IEEE4)
+  diag_csat_raw=0
+
+EndTable
+
+
+'Compute the covariances of Uz, kh, Ts, and fw, as well as the other cross
+'products, required to rotate the data into natural wind coordinates.
+'This data is output every OUTPUT_INTERVAL minutes.
+DataTable (comp_cov,TRUE,1)
+  DataInterval (0,OUTPUT_INTERVAL,min,1)
+
+  Covariance (8,aligned_data(1),IEEE4,(disable_flag_on(1) OR NOT (save_flx_flag_on)),36)
+  WindVector (1,wind_east,wind_north,IEEE4,(disable_flag_on(1) OR NOT (save_flx_flag_on)),0,1,2)
+  WindVector (1,Uy,Ux,IEEE4,(disable_flag_on(1) OR NOT (save_flx_flag_on)),0,1,2)
+  Average (1,t_hmp,IEEE4,FALSE)
+  Average (1,e_hmp,IEEE4,FALSE)
+  Average (1,Ts,IEEE4,disable_flag_on(1) OR NOT (save_flx_flag_on))
+'  Average (2,Tsoil(1),IEEE4,FALSE)
+
+EndTable
+
+
+
+'*** Subroutines ***
+
+'Hukseflux HFP01SC insitu calibration routine. 
+'Sub hfp01sc_cal
+
+ 'Begin HFP01SC calibration one minute into very CAL_INTERVAL minutes.
+'  If ( IfTime (1,CAL_INTERVAL,Min) ) Then
+'    shf_cal_on = TRUE
+'    Move (shf_mV_0(1),4,shf_mV_run(1),4)
+'    SW12 (TRUE)
+'  EndIf
+
+'  If ( IfTime (4,CAL_INTERVAL,Min) ) Then
+'    Move (shf_mV_180(1),4,shf_mV_run(1),4)
+'    Move (V_Rf_180(1),4,V_Rf_run(1),4)
+'    SW12 (FALSE)
+'  EndIf
+
+'  If ( IfTime (7,CAL_INTERVAL,Min) ) Then
+'    Move (shf_mV_360(1),4,shf_mV_run(1),4)
+   'Compute new HFP01SC calibration factors.
+'    For j = 1 to 4
+'      shf_cal(j) = V_Rf_180(j)*V_Rf_180(j)*128.7/ABS (((shf_mV_0(j)+shf_mV_360(j))/2)-shf_mV_180(j))
+'    Next j
+'  EndIf
+
+ 'End HFP01SC calibration sequence.
+'  If ( IfTime (19,CAL_INTERVAL,Min) ) Then shf_cal_on = FALSE
+
+'EndSub
+
+
+
+'*** Define Program Control Menu ***
+
+DisplayMenu ("Program Control",TRUE)
+
+  MenuItem ("Save Fluxes?",save_flx_flag_on)
+    MenuPick (Yes,No)
+
+  MenuItem ("Save Time Series?",save_ts_flag_on)
+    MenuPick (Yes,No)
+
+EndMenu
+
+
+
+
+'*** Program ***
+
+BeginProg
+
+  n = 1
+
+ 'Save fluxes on compile.
+  save_flx_flag_on = TRUE
+
+ 'Save time series on compile.
+  save_ts_flag_on = TRUE
+
+ 'Set all CSAT3 variables to NaN.
+  Move (Ux_raw,5,NaN,1)
+
+ 'Set the cs615 variables to NaN.
+'  Move (cs615(1),2,NaN,1)
+
+ 'Set the SDM clock speed.
+  SDMSpeed (SDM_PER)
+
+ 'Load the HFP01SC factory calibration.
+'  shf_cal(1) = HFP01SC_CAL_1
+'  shf_cal(2) = HFP01SC_CAL_2
+'  shf_cal(3) = HFP01SC_CAL_3
+'  shf_cal(4) = HFP01SC_CAL_4
+
+
+  Scan (SCAN_INTERVAL,mSec,SCAN_BUFFER_SIZE,0)
+
+   'CR5000 panel temperature.
+    PanelTemp (panel_temp_raw,250)
+
+   'Measure FW05.
+    TCDiff (fw_raw,1,mV20C,6,TypeE,panel_temp_raw,TRUE,200,250,1,0)
+
+
+   'Measure KH20.
+    VoltDiff (kh_raw,1,mV5000,1,TRUE,200,250,1,0)
+
+
+  'Get CSAT3 wind and sonic temperature data.
+'   CSAT3 (Ux_raw,1,3,91,CSAT_OPT)
+
+   'Measure the RMY81000 
+   
+    VoltDiff (Ux_Raw,1,mV5000,2,True ,0,250,0.01,-25)  'U,V, and W wind speed=[(Scale*2/Range)*mV]-Scale
+    VoltDiff (Uy_Raw,1,mV5000,3,True ,0,250,0.01,-25)  'U,V, and W wind speed=[(Scale*2/Range)*mV]-Scale
+    VoltDiff (Uz_Raw,1,mV5000,4,True ,0,250,0.01,-25)  'U,V, and W wind speed=[(Scale*2/Range)*mV]-Scale
+    Voltdiff (Ts_Raw,1,mV5000,5,True ,0,250,0.02,-53.15) 'Multi=(100/Range)+220-273.15
+
+   'Measure the HMP45C temperature and fraction humidity.
+    VoltDiff (t_hmp,2,mV1000,9,TRUE,200,250,0.1,0)
+
+
+   'Measure battery voltage.
+    Battery (batt_volt)
+
+
+   'Find the engineering units for the HMP45C temperature and humidity.
+    t_hmp = t_hmp-40
+    rh_hmp = rh_hmp*0.01
+
+   'Find the HMP45C vapor pressure (kPa) using a sixth order polynomial (Lowe, 1977).
+    e_sat = 0.1*(A_0+t_hmp*(A_1+t_hmp*(A_2+t_hmp*(A_3+t_hmp*(A_4+t_hmp*(A_5+t_hmp*A_6))))))
+    e_hmp = e_sat*rh_hmp
+
+
+   'Measure the Q7.1 net radiometer.
+'    VoltDiff (Rn,1,mV200C,8,TRUE,200,250,1,0)
+
+	 'Measure the NRLite net radiometer. 
+
+	  VoltDiff (Rn_meas,1,mV20C,8,TRUE,200,250,NRLITE_CAL,0) 
+
+
+   'Measure the HFP01SC soil heat flux plates.
+'    VoltDiff (shf_mV(1),4,mV50C,11,TRUE,200,250,1,0)
+
+   'Apply HFP01SC soil heat flux plate calibration.
+'    For j = 1 to 4
+'      shf(j) = shf_mV(j)*shf_cal(j)
+'    Next j
+
+   'Measure voltage across the heater (Rf_V).
+'    VoltDiff (V_Rf(1),4,mV5000,17,TRUE,200,250,0.001,0)
+
+   'Maintain filtered values for calibration. 
+'    AvgRun (shf_mV_run(1),4,shf_mV(1),100)
+'    AvgRun (V_Rf_run(1),4,V_Rf(1),100)
+
+
+   'Measure the TCAV soil thermocouples.
+'    TCDiff (tcav_1,2,mV20C,15,TypeE,panel_temp,TRUE,200,250,1,0)
+
+
+   'Turn the cs615s on.
+    PortSet (&h01,TRUE)
+
+   'Measure the cs615 soil water content probes. 
+    PeriodAvg (cs615(1),2,mV5000,13,0,0,3,15,0.001,0)
+    soil_water_C(1)=-0.187+(0.037*cs615(1))+(0.335*cs615(1)^2)
+    soil_water_C(2)=-0.187+(0.037*cs615(2))+(0.335*cs615(2)^2)
+    
+   'CS105 Barometric Pressure Sensor measurement BP_kPa:  
+		VoltSe(BP_kPa,1,mV5000,33,1,0,250,0.184,600)
+		BP_kPa=BP_kPa*0.1
+		
+   'Turn the cs615s off.
+    PortSet (&h01,FALSE)
+'
+   'Measure bole temperature.
+    TCDiff (T_bole(1),6,mV20C,11,TypeT,panel_temp_raw,TRUE,200,250,1,0)
+		
+   'Apply temperature correction to cs615 period and find volumetric water content.
+'    For j = 1 to 2
+'      If ((10 <= Tsoil(j)) AND (Tsoil(j) <= 40)) Then
+'        cs615_T(j) = cs615(j)+(20-Tsoil(j))*(0.526+cs615(j)*(-0.052+cs615(j)*0.00136))
+
+'      Else
+'        cs615_T(j) = cs615(j)
+
+'      EndIf
+'      soil_water_T(j) = -0.0663+cs615_T(j)*(-0.0063+cs615_T(j)*0.0007)
+'    Next j
+
+
+   'Lag the CSAT3 and analog measurements.
+    CallTable dly_data
+
+
+
+    If ( scan_count >= OFFSET ) Then
+
+     'Load in the analog data that has been lagged by OFFSET scans.
+      GetRecord (dly_data_out(1),dly_data,OFFSET)
+      Move (kh,1,dly_data_out(6),1)		'kh20
+      Move (fw,1,dly_data_out(8),1)		'fw
+      Move (panel_temp,1,dly_data_out(12),1)	'panel_temp
+      ln_kh = log(kh)
+
+     'Load in CSAT3 data that has been lagged by CSAT_REC_BCK scans.
+      GetRecord (dly_data_out(1),dly_data,CSAT_REC_BCK)
+      Move (Uz,3,dly_data_out(1),3)		'Uz, Ux, Uy
+      Move (Ts,1,dly_data_out(7),1)		'Ts
+      diag_csat=0
+      Move (diag_csat,1,dly_data_out(9),1)	'diag_csat
+
+
+     'Copy and convert CSAT3 for compass wind vector computation.
+      wind_east = -1*Uy
+      wind_north = Ux
+
+
+     'Define 61502 as NaN.
+      If ( diag_csat = NaN ) Then ( diag_csat = 61502 )
+
+     'Break up the four CSAT3 warning flags into four separate bits.
+      del_T_f = (diag_csat AND &h8000)/&h8000
+      sig_lck_f = (diag_csat AND &h4000)/&h4000
+      amp_h_f = (diag_csat AND &h2000)/&h2000
+      amp_l_f = (diag_csat AND &h1000)/&h1000
+
+     'Turn on the intermediate processing disable flag when any CSAT3 warning flag is
+     ' high, including the special cases NaN (61502), a Lost Trigger (61440), No Data
+     ' (61503), an SDM error (61441), or wrong CSAT3 embedded code (61442).
+      If ( diag_csat AND &hf000 ) Then
+        disable_flag_on(1) = TRUE
+
+      Else
+        disable_flag_on(1) = FALSE
+
+      EndIf
+
+    'Turn on only when CSAT3 diagnostic warning flags are set.
+     If ( (diag_csat AND &hf000) = &hf000 ) Then
+       disable_flag_on(3) = TRUE
+
+     Else
+       disable_flag_on(3) = FALSE
+
+     EndIf
+
+     'Save the four most significant bits of the CSAT3 diagnostics, except for the
+     ' special cases NaN (61502), a Lost Trigger (61440), No Data (61503), an SDM
+     ' error (61441), or wrong CSAT3 embedded code (61442).
+      If ( diag_csat < &hf000 ) Then ( diag_csat = INT ((diag_csat AND &hf000)/&h1000) )
+
+
+     'Apply calibration and wind correction to net radiometer measurement. Q7 net radiometer
+'      If ( NOT (disable_flag_on(1)) ) Then
+'        hor_wind = SQR (Ux*Ux+Uy*Uy)
+'        If (Rn > 0) Then
+'          Rn = Rn*NRLite_POS_CAL
+'          Rn_cor = Rn*(1+(0.0132*hor_wind)/(0.066+(0.2*hor_wind)))
+
+'        Else
+'          Rn = Rn*NRLite_NEG_CAL
+'          Rn_cor = Rn*((0.00174*hor_wind)+0.99755)
+
+'        EndIf
+
+'      Else
+'        If (Rn > 0) Then
+'          Rn = Rn*NRLite_POS_CAL
+'          Rn_cor = Rn*1.045
+
+ '       Else
+'          Rn = Rn*NRLite_NEG_CAL
+'          Rn_cor = Rn
+
+'       EndIf
+
+ '     EndIf
+ 
+'Apply calibration and wind correction to net radiometer measurement. 
+
+		If ( NOT (disable_flag_on(1)) ) Then 
+		hor_wind = SQR (Ux*Ux+Uy*Uy) 
+		Rn_cor = Rn_meas*(1+(0.021286*(hor_wind-5))) 
+
+		Else 
+		Rn_cor = Rn_meas 
+		EndIf 
+
+
+     'Write a file mark to the time series table every hour.  The filemark is written
+     ' only to the card if time series data are being stored.
+      If ( (even_min_flag_on) AND (IfTime (0,60,Min)) ) Then ( FileMark (ts_data) )
+
+     'Start saving the time series data on an even minute boundary.
+      If ( (save_ts_flag_on) AND (NOT (even_min_flag_on)) ) Then
+        If ( IfTime (0,1,Min) ) Then ( even_min_flag_on = TRUE )
+
+      Else
+        If ( (NOT (save_ts_flag_on)) AND (even_min_flag_on) AND (NOT (one_more_record)) ) Then
+          FileMark (ts_data)
+          one_more_record = TRUE
+
+        Else
+          If (one_more_record) THEN
+            one_more_record = FALSE
+            even_min_flag_on = FALSE
+
+          EndIf
+
+        EndIf
+
+      EndIf
+
+
+     'Save adjusted time series data.
+      CallTable ts_data
+
+      CallTable comp_cov
+
+
+      If ( comp_cov.Output(1,1) ) Then
+
+        GetRecord (cov_out(1),comp_cov,1)
+'        Tsoil_avg(1) = comp_cov.tcav_1_Avg(1,1)
+'        Tsoil_avg(2) = comp_cov.tcav_2_Avg(1,1)
+
+       'Compass wind direction will be between 0 and 360 degrees.
+        wnd_dir_compass = (wnd_dir_compass+CSAT3_AZIMUTH) MOD 360
+
+       'CSAT3 wind direction will be between 0 to 180 degrees and 0 to -180 degrees.
+        If ( wnd_dir_csat3 ) > 180 Then ( wnd_dir_csat3 = wnd_dir_csat3-360 )
+
+        h2o_hmp_mean = e_hmp_mean/((t_hmp_mean+273.15)*RV)
+        rho_d_mean = (PRESS-e_hmp_mean)/((t_hmp_mean+273.15)*RD)
+        rho_a_mean = (rho_d_mean+h2o_hmp_mean)/1000
+
+
+       'Compute the KH20 oxygen corrrection for latent heat flux and water vapor density variance.
+        oc_LE = LV*KO*CO*MO*PRESS/(KW*R*(t_hmp_mean+273.15)*(t_hmp_mean+273.15))*cov_Uz_Ts
+        oc_var = 2*KO*CO*MO*PRESS/(X*KW^2*R*(t_hmp_mean+273.15)*(t_hmp_mean+273.15))*cov_h2o_Ts
+
+
+       'Scale the KH20 cross products.
+        cov_Uz_h2o = cov_Uz_h2o/XKW
+        cov_Ux_h2o = cov_Ux_h2o/XKW
+        cov_Uy_h2o = cov_Uy_h2o/XKW
+        cov_h2o_Ts = cov_h2o_Ts/XKW
+        cov_h2o_fw = cov_h2o_fw/XKW
+
+       'Compute online fluxes.
+        LE_kh = LV*cov_Uz_h2o
+        Hs = rho_a_mean*CP*cov_Uz_Ts
+        H = rho_a_mean*CP*cov_Uz_fw
+
+        tau = SQR ((cov_Uz_Ux*cov_Uz_Ux)+(cov_Uz_Uy*cov_Uz_Uy))
+        u_star = SQR (tau)
+        tau = rho_a_mean*tau
+
+        sigma_wpl = h2o_hmp_mean/rho_d_mean
+
+       'KH20 Webb et al. term for water vapor Eq. (25).
+        h2o_wpl_LE = MU_WPL*sigma_wpl*(LE_kh-oc_LE)
+        h2o_wpl_H = (1+(MU_WPL*sigma_wpl))*h2o_hmp_mean/(t_hmp_mean+273.15)*LV*cov_Uz_Ts
+        LE_wpl = LE_kh-oc_LE+h2o_wpl_LE+h2o_wpl_H
+
+       'Compute a sensible heat flux from Hs and LE_wpl.
+        Hc = (Hs-(rho_a_mean*CP*0.51*RD*(t_hmp_mean+273.15)*(t_hmp_mean+273.15)*LE_wpl)/(PRESS*LV))*((t_hmp_mean+273.15)/(Ts_mean+273.15))
+
+
+       'Compute the change in soil temperature.
+'        del_Tsoil(1) = prev_Tsoil(1)-Tsoil_avg(1)
+'        del_Tsoil(2) = prev_Tsoil(2)-Tsoil_avg(2)
+
+'        prev_Tsoil(1) = Tsoil_avg(1)
+'        prev_Tsoil(2) = Tsoil_avg(2)
+
+      EndIf
+
+     'Write a file mark to the flux table.
+      If ( IfTime (0,1,Day) ) Then ( FileMark (flux) )
+      CallTable flux
+
+    Else
+      scan_count = scan_count+1
+
+    EndIf
+
+'    Call hfp01sc_cal
+
+  NextScan
+
+EndProg

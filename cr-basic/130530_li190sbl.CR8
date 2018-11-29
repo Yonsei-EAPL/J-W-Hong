@@ -1,0 +1,31 @@
+'CR800 Series Datalogger
+
+
+'History
+'2013-05-30, J-W Hong, for Li-190SB-L
+
+
+'Declare Variables and Units
+Public Logger_V, Logger_T
+Public Li190_1
+
+
+'Define Data Tables
+DataTable(data_sec,True,-1)
+  DataInterval(0,1,sec,0)
+  Average(1,Li190_1,FP2,False)
+  Minimum(1,Logger_V,FP2,False,False)
+  Minimum(1,Logger_T,FP2,False,False)
+EndTable
+
+
+'Main Program
+BeginProg
+  Scan(1,Sec,1000,0)
+    Battery (Logger_V)
+    PanelTemp (Logger_T,_60Hz)
+    'Li190SB-L 1st
+    VoltDiff (Li190_1,1,mV25,1,True ,0,_60Hz,1000/3.02,0)
+    CallTable(data_sec)
+  NextScan
+EndProg

@@ -1,0 +1,607 @@
+'CR3000 Series Datalogger
+
+'Created by Short Cut (2.5)
+'
+'green - c1
+'white - c2
+'brown - c3
+'black / clear - g
+'red - 12v
+'black - g
+
+'SDM address
+'1- 7200RS
+'3- CSAT3
+
+Const ANGLE_FROM_NORTH = 85 'Negative when West of North, positive when East of
+' North (degrees).
+' () -> Compass coordinate system
+' {} -> Right handed coordinate system aligned to magnetic North
+' ANGLE_FROM_NORTH    (N)
+'                 \   {-x}
+'                  \   |
+' CSAT3          \     |
+' Transducers ->  *    |
+'                  \   |
+'                   \  |
+'                    \ |
+'    (W) {-y} --------[ ]--------> {+y} (E)
+'                    / |
+'         CSAT3 Block  |
+'                      |
+'                      |
+'                      v
+'                     {+x}
+'                     (S)
+'If the CSAT3 head is pointing West of North (above figure), the
+'constant, ANGLE_FROM_NORTH, is negative.  If the CSAT3 head is pointing
+'East of North, the constant, ANGLE_FROM_NORTH, is positive.
+'
+'The program computes the Compass wind direction, using the constant ANGLE_FROM_NORTH,
+'and a CSAT3 wind direction.  Good CSAT3 wind directions are between -90 to 0 and 0 to
+'90 degrees (-pi/2 to 0 and 0 to pi/2 radians), i.e. the wind is blowing into the CSAT3
+'sensor head.
+
+'Declare Variables and Units
+Public Batt_Volt, PTemp_C
+'Public pressure
+'Public WS_ms
+'Public WindDir
+
+Units Batt_Volt=Volts
+'Units pressure=mV
+'Units WS_ms=m/s
+'Units WindDir=Degrees
+'
+'Measurement Rate					'10 Hz			20 Hz
+Const SCAN_INTERVAL = 50			'100 (mSec)		50 (mSec)
+
+'Output period
+Const OUTPUT_INTERVAL = 30			'On-line flux_60m data output interval in minutes.
+
+Const CP = 1004.67				'Estimate of heat capacity of air [J/(kg K)].
+'Const A_0 = 6.107799961			'Coefficients for the sixth order approximating
+'Const A_1 = 4.436518521e-1		' saturation vapor pressure polynomial (Lowe,
+'Const A_2 = 1.428945805e-2		' Paul R., 1976.:  An approximating polynomial for
+'Const A_3 = 2.650648471e-4		' computation of saturation vapor pressure, J. Appl.
+'Const A_4 = 3.031240396e-6		' Meteor., 16, 100-103).
+'Const A_5 = 2.034080948e-8
+'Const A_6 = 6.136820929e-11
+
+Public rho_a				'Density of moist air.
+'Public hmp(3)				'HMP45C vapor density, temperature and relative humidity.
+'Public e					'HMP45C vapor pressure.
+'Public e_sat				'Saturation vapor pressure.
+'Alias hmp(1) = h2o_hmp
+'Alias hmp(2) = t_hmp
+'Alias hmp(3) = rh_hmp
+Const press = 101.3
+
+Units rho_a = kg/(m^3)
+'Units h2o_hmp = g/(m^3)
+'Units t_hmp = C
+'Units rh_hmp = fraction
+
+'Units e = kPa
+'Units e_sat = kPa
+
+'Program Control flags.
+Public flag(8)
+
+Const YES = -1					'Yes is defined as True or -1.
+Const NO = 0					'No is defined as False or 0.
+
+'CSAT3 variables with additional one or four scan delay.
+Public wind(5)					'Wind, temperature, and diagnostic data from CSAT3.
+Alias wind(1) = Ux_60m
+Alias wind(2) = Uy_60m
+Alias wind(3) = Uz_60m
+Alias wind(4) = Ts_60m
+Alias wind(5) = diag_csat
+Units wind = m/s
+Units Ts_60m = C
+Units diag_csat = unitless
+
+
+
+'Flux variables.
+
+
+Public Hs_60m(1)		'Sensible heat flux_60m using sonic temperature.
+Public tau_60m(1)		'Momentum flux_60m.
+Public u_star_60m(1)	'Friction velocity.
+Public cov_out(18)	'Covariances of wind and scalars, wind vector, mean soil temperature.
+
+Units Hs_60m = W/m^2
+'Units H = W/m^2
+Units tau_60m = kg m/s^2
+Units u_star_60m = m/s
+
+
+'Aliases for covariances.
+Alias cov_out(1) = Uz_60m_Uz_60m
+Alias cov_out(2) = Uz_60m_Ux_60m
+Alias cov_out(3) = Uz_60m_Uy_60m
+Alias cov_out(4) = Uz_60m_Ts_60m
+Alias cov_out(5) = Ux_60m_Ux_60m
+Alias cov_out(6) = Ux_60m_Uy_60m
+Alias cov_out(7) = Ux_60m_Ts_60m
+Alias cov_out(8) = Uy_60m_Uy_60m
+Alias cov_out(9) = Uy_60m_Ts_60m
+Alias cov_out(10) = Ts_60m_Ts_60m
+
+
+Units Uz_60m_Uz_60m = (m/s)^2
+Units Uz_60m_Ux_60m = (m/s)^2
+Units Uz_60m_Uy_60m = (m/s)^2
+Units Uz_60m_Ts_60m = m C/s
+Units Ux_60m_Ux_60m = (m/s)^2
+Units Ux_60m_Uy_60m = (m/s)^2
+Units Ux_60m_Ts_60m = m C/s
+Units Uy_60m_Uy_60m = (m/s)^2
+Units Uy_60m_Ts_60m = m C/s
+Units Ts_60m_Ts_60m = C^2
+
+Alias cov_out(13) = sonic_WD_compass
+Alias cov_out(15) = sonic_WS
+Alias cov_out(16) = rslt_sonic_WS
+Alias cov_out(17) = wnd_dir_sonic
+Alias cov_out(18) = std_WD_sonic
+Units sonic_WD_compass = degrees
+Units sonic_WS = m/s
+Units rslt_sonic_WS = m/s
+Units wnd_dir_sonic = degrees
+Units std_WD_sonic = degrees
+
+'Working variables.
+Dim cov_in(4)				'Array used in the covariance instruction.
+'Dim j					'Counter variable.
+'Dim scan_count				'Counts the number scans that have been executed.
+Dim wind_east				'Uy_60m wind in compass coordinate system.
+Dim wind_north				'Ux_60m wind in compass coordinate system.
+
+
+Public CNR4(4)
+Public CNR4Mult(4)
+Public CNR4TC
+Public CNR4TK
+Public Short_R_Net
+Public Long_R_Net
+Public Albedo
+Public Total_Net_R
+Public LongUpCo
+Public LongDnCo
+
+Alias CNR4(1)=ShortUp
+Alias CNR4(2)=ShortDn
+Alias CNR4(3)=LongUp
+Alias CNR4(4)=LongDn
+Alias CNR4Mult(1)=SUpMult
+Alias CNR4Mult(2)=SDnMult
+Alias CNR4Mult(3)=LUpMult
+Alias CNR4Mult(4)=LDnMult
+
+Units CNR4TC=Deg C
+Units CNR4TK=K
+Units Short_R_Net=W/m^2
+Units Long_R_Net=W/m^2
+Units Albedo=W/m^2
+Units Total_Net_R=W/m^2
+Units LongUpCo=W/m^2
+Units LongDnCo=W/m^2
+Units ShortUp=W/m^2
+Units ShortDn=W/m^2
+Units LongUp=W/m^2
+Units LongDn=W/m^2
+
+'******************* variables for LI7200 **********************
+Const OFFSET2 = 16					'An offset delay that will be introduced to the CSAT3, LI-7200, and analog data.
+Const DELAY_LI7200 = 3				 'For now we only consider time delay from SMD LI7200(0.3sec).
+
+Const LI7200_REC_BCK = OFFSET2 - DELAY_LI7200	'???  'Number of records back to align 7200 data.
+
+Public li7200_raw(12)
+Alias li7200_raw(1) = li7200_co2_m
+Alias li7200_raw(2) = li7200_h2o_m
+Alias li7200_raw(3) = li7200_co2_d
+Alias li7200_raw(4) = li7200_h2o_d
+Alias li7200_raw(5) = li7200_agc
+Alias li7200_raw(6) = li7200_Patm
+Alias li7200_raw(7) = li7200_Tin
+Alias li7200_raw(8) = li7200_Tout
+Alias li7200_raw(9) = li7200_Tavg_Tin_Tout
+Alias li7200_raw(10)= li7200_flowrate
+Units li7200_co2_m = umol/mol
+Units li7200_h2o_m = mmol/mol
+Units li7200_co2_d = mmol/m3
+Units li7200_h2o_d = mmol/m3
+Units li7200_agc = %
+Units li7200_Patm = kPa
+Units li7200_Tin = degC
+Units li7200_Tout = degC
+Units li7200_Tavg_Tin_Tout = degC
+Units li7200_flowrate = LPM
+
+Public flow_rate
+Public diff_press_raw
+Units flow_rate = L/min
+
+'Dim Fc_ga_li7200			'Carbon dioxide flux,
+'Dim LE_ga_li7200			'Latent heat flux, 
+'Units Fc_ga_li7200 = mg/(m^2 s)
+'Units LE_ga_li7200 = W/m^2
+
+
+
+
+'*******************end of Li7200 variables ********************
+
+
+Public prop_WD, prop_WS, amb_press
+
+Public JY_WS, JY_WS_pre
+
+DataTable (prop_wind_60m,TRUE,-1)
+  DataInterval (0,1,min,100)
+  CardOut (0,500000)
+
+  WindVector (1,prop_WS,prop_WD,FP2,False,0,0,0)
+  Maximum (1,prop_WS,FP2,FALSE,FALSE)
+  Average (1,JY_WS,FP2,FALSE)
+  Maximum (1,JY_WS,FP2,FALSE,FALSE)  
+
+EndTable 
+
+'Compute the covariances of vertical wind, co2, h2o, natural log of the krypton
+'voltage, sonic temperature, and fine wire thermocouple temperature, as well as the
+'other cross products, required to rotate the data into natural wind coordinates.
+'This data is output every OUTPUT_INTERVAL minutes.
+DataTable (comp_cov,TRUE,1)
+  DataInterval (0,OUTPUT_INTERVAL,min,1)'
+
+  Covariance (4,cov_in(1),IEEE4,0,10)
+  WindVector (1,wind_east,wind_north,IEEE4,0,0,1,2)
+  WindVector (1,Uy_60m,Ux_60m,IEEE4,0,0,1,2)
+
+EndTable
+
+
+'Set flag(8) high or set "Save Time Series?" custom menu option to Yes to save time
+'series data.
+DataTable (ts_data_60m,flag(8),-1)
+  DataInterval (0,SCAN_INTERVAL,mSec,10)
+  TableFile("CRD:"&Status.SerialNumber(1,1)&".ts_data_60m_",64,-1,0,1,Day,0,0)
+  '  CardOut (0,-1)
+
+  Sample (5,wind(1),IEEE4)
+  Sample (8,li7200_raw(1),IEEE4)
+
+EndTable
+
+
+'This table will hold twenty-eight days of flux_60m data.  This data is
+' output every OUTPUT_INTERVAL minutes.
+DataTable (flux_60m,TRUE,-1)
+  DataInterval (0,OUTPUT_INTERVAL,Min,10)
+  CardOut (0,5000000)
+
+  Sample (1,Hs_60m(1),IEEE4)
+
+  Sample (1,tau_60m(1),IEEE4)
+  Sample (1,u_star_60m(1),IEEE4)
+  Sample (10,cov_out(1),IEEE4)
+  Average (4,wind(1),IEEE4,0)
+
+  Sample (1,sonic_WD_compass,IEEE4)
+  Sample (1,wnd_dir_sonic,IEEE4)
+  Sample (1,sonic_WS,IEEE4)
+  Sample (1,rslt_sonic_WS,IEEE4)
+
+  Sample(1,ShortUp,FP2)   'net radiometer
+  Sample(1,ShortDn,FP2)
+  Sample(1,LongUp,FP2)
+  Sample(1,LongDn,FP2)
+  Sample(1,CNR4TC,FP2)
+  Sample(1,CNR4TK,FP2)
+  Sample(1,Short_R_Net,FP2)
+  Sample(1,Long_R_Net,FP2)
+  Sample(1,Albedo,FP2)
+  Sample(1,Total_Net_R,FP2)
+  Sample(1,LongUpCo,FP2)
+  Sample(1,LongDnCo,FP2)
+
+  Sample(1,Batt_Volt,FP2)
+  Sample(1,PTemp_C,FP2)
+
+  Average (1,amb_press,IEEE4,0)
+   
+EndTable
+
+'*** Define Custom Menus ***
+
+
+DisplayMenu ("Program Control",100)
+
+  MenuItem ("Save Time Series?",flag(8))
+MenuPick (YES,NO)
+
+EndMenu
+
+
+'Program the GPS16-HVS to use 38.4 kbaud, no parity, 8 data bits, and 1 stop bit
+'*** Wiring ***
+'CONTROL PORTS
+
+'C3   GPS16-HVS pulse per second (gray)
+'C4   GPS16-HVS RS-232 TxD (white)
+'G    yellow, blue, shield
+
+'POWER OUT
+
+'12V  GPS16-HVS power (red)
+'G    GPS16-HVS power and RS-232 signal reference (black)
+
+Const LOCAL_TIME_OFFSET = 9            'Local time offset relative to UTC time
+
+ 
+
+Dim nmea_sentence(2) As String * 90
+Public gps_data(15)
+Alias gps_data(1) = latitude_a          'Degrees latitude (+ = North; - = South)
+Alias gps_data(2) = latitude_b          'Minutes latitude
+Alias gps_data(3) = longitude_a         'Degress longitude (+ = East; - = West)
+Alias gps_data(4) = longitude_b         'Minutes longitude
+Alias gps_data(5) = speed               'Speed
+Alias gps_data(6) = course       'Course over ground
+Alias gps_data(7) = magnetic_variation  'Magnetic variation from true north (+ = East; - = West)
+Alias gps_data(8) = fix_quality         'GPS fix quality: 0 = invalid, 1 = GPS, 2 = differential GPS, 6 = estimated
+Alias gps_data(9) = nmbr_satellites     'Number of satellites used for fix
+Alias gps_data(10) = altitude           'Antenna altitude
+Alias gps_data(11) = pps                'usec into sec of system clock when PPS rising edge occurs, typically 990,000 once synced
+Alias gps_data(12) = dt_since_gprmc     'Time since last GPRMC string, normally less than 1 second
+Alias gps_data(13) = gps_ready          'Counts from 0 to 10, 10 = ready
+Alias gps_data(14) = max_clock_change   'Maximum value the clock was changed in msec
+Alias gps_data(15) = nmbr_clock_change  'Number of times the clock was changed
+
+'Define Units to be used in data file header
+
+Units latitude_a = degrees
+Units latitude_b = minutes
+Units longitude_a = degrees
+Units longitude_b = minutes
+Units speed = m/s
+Units course = degrees
+Units magnetic_variation = unitless
+Units fix_quality = unitless
+Units nmbr_satellites = unitless
+Units altitude = m
+Units pps = ms
+Units dt_since_gprmc = s
+Units gps_ready = unitless
+Units max_clock_change = ms
+Units nmbr_clock_change = samples
+
+
+'Main Program
+BeginProg
+
+    'Initialize CNR4 multipliers
+
+  SUpMult=1000/13.89
+  SDnMult=1000/14.83
+  LUpMult=1000/13.36
+  LDnMult=1000/14.40
+
+  PipeLineMode
+
+  'Save flux_60mes on compile.
+  flag(8) = TRUE
+
+  Scan (SCAN_INTERVAL,mSec,100,0)
+    
+   
+    GPS (latitude_a,Com2,LOCAL_TIME_OFFSET*3600,0,nmea_sentence(1))
+    
+    PulseCount(prop_WS,1,1,1,1000,0.098,0)
+    
+'------------------------------------------------------------------------    
+    PulseCount (JY_WS_pre,1,2,0,1,1.0,0)
+
+    If ( 0 <= JY_WS_pre AND JY_WS_pre < 51 ) Then
+      JY_WS = 0.0588 * JY_WS_pre
+    EndIf
+
+    If ( 51 <= JY_WS_pre AND JY_WS_pre  < 89 ) Then
+      JY_WS = 0.0562 * JY_WS_pre
+    EndIf
+
+    If ( 89 <= JY_WS_pre AND JY_WS_pre  < 193 ) Then
+      JY_WS = 0.0518 * JY_WS_pre
+    EndIf
+
+    If ( 193 <= JY_WS_pre AND JY_WS_pre  < 287.5 ) Then
+      JY_WS = 0.0522 * JY_WS_pre
+    EndIf
+
+    If ( 287.5 <= JY_WS_pre AND JY_WS_pre  < 382 ) Then
+      JY_WS = 0.0524 * JY_WS_pre
+    EndIf
+
+    If ( 382 <= JY_WS_pre AND JY_WS_pre  < 474 ) Then
+      JY_WS = 0.0527 * JY_WS_pre
+    EndIf
+
+    If ( 474 <= JY_WS_pre AND JY_WS_pre  < 547 ) Then
+      JY_WS = 0.0548 * JY_WS_pre
+    EndIf
+
+    If ( 547 <= JY_WS_pre AND JY_WS_pre  < 640 ) Then
+      JY_WS = 0.0547 * JY_WS_pre
+    EndIf
+
+    If ( 640 <= JY_WS_pre AND JY_WS_pre  < 733 ) Then
+      JY_WS = 0.0546 * JY_WS_pre
+    EndIf
+
+    If ( 733 <= JY_WS_pre AND JY_WS_pre  < 826 ) Then
+      JY_WS = 0.0545 * JY_WS_pre
+    EndIf
+
+    If ( 826 <= JY_WS_pre AND JY_WS_pre  < 920 ) Then
+      JY_WS = 0.0543 * JY_WS_pre
+    EndIf
+
+    If ( 920 <= JY_WS_pre AND JY_WS_pre < 1013.5 ) Then
+      JY_WS = 0.0543 * JY_WS_pre
+    EndIf
+
+    If ( 1013.5 <= JY_WS_pre AND JY_WS_pre  < 1107.5 ) Then
+      JY_WS = 0.0542 * JY_WS_pre
+    EndIf
+
+    If ( 1107.5 <= JY_WS_pre AND JY_WS_pre  < 1200.8 ) Then
+      JY_WS = 0.0541 * JY_WS_pre
+    EndIf
+
+    If ( 1200.8 <= JY_WS_pre AND JY_WS_pre  < 1294.5 ) Then
+      JY_WS = 0.0541 * JY_WS_pre
+    EndIf
+
+    If ( 1294.5 <= JY_WS_pre AND JY_WS_pre  < 1388 ) Then
+      JY_WS = 0.054 * JY_WS_pre
+    EndIf
+
+    If ( 1388 <= JY_WS_pre AND JY_WS_pre  < 1481.6 ) Then
+      JY_WS = 0.054 * JY_WS_pre
+    EndIf
+
+    If ( 1481.6 <= JY_WS_pre AND JY_WS_pre  < 1575 ) Then
+      JY_WS = 0.054 * JY_WS_pre
+    EndIf
+
+    If ( 1575 <= JY_WS_pre AND JY_WS_pre  < 1668.5 ) Then
+      JY_WS = 0.0539 * JY_WS_pre
+    EndIf
+
+    If ( 1668.5 <= JY_WS_pre AND JY_WS_pre  < 1761.8 ) Then
+      JY_WS = 0.0539 * JY_WS_pre
+    EndIf
+
+    If ( 1761.8 <= JY_WS_pre AND JY_WS_pre  < 1855.2 ) Then
+      JY_WS = 0.0539 * JY_WS_pre
+    EndIf
+
+
+    If (JY_WS <0 OR JY_WS > 100) Then JY_WS = 0
+
+    
+    'Default Datalogger Battery Voltage measurement Batt_Volt:
+    Battery(Batt_Volt)
+
+
+
+    'Find the HMP45C vapor pressure, in kPa, using a sixth order polynomial (Lowe, 1976).
+    '    e_sat = 0.1*(A_0+t_hmp*(A_1+t_hmp*(A_2+t_hmp*(A_3+t_hmp*(A_4+t_hmp*(A_5+t_hmp*A_6))))))
+    '    e = e_sat * rh_hmp
+
+    'Compute the HMP45C vapor density.
+    '    h2o_hmp = e/((t_hmp+273.15)*0.0004615)
+
+    'Compute moist air density.
+    '    rho_a = (press-e)/((t_hmp+273.15)*0.28704)+(h2o_hmp/1000)
+    rho_a = 1.2  'because there is no temp / RH sensor
+
+    'Get CSAT3 wind and sonic temperature data.
+    CSAT3 (wind(1),1,3,91,20)
+    wind_east = -1 * Uy_60m
+    wind_north = Ux_60m
+
+  	'Get LI7200 data
+		LI7200 (li7200_raw(1),1,1,3)		'to get diff pressure only in 6th array    
+    'twelve data out (co2 dry/h2o dry/co2/h2o/AGC/Ptot/T_in/T_out/AUX1/AUX2/AUX3/AUX4)
+    diff_press_raw = li7200_raw(6)      		
+'		LI7200 (li7200_raw(1),1,1,2)		
+'    'ten data out (co2 dry/h2o dry/co2/h2o/AGC/Ptot/T_in/T_out/T_AVG/AUX1)
+'    amb_press_raw = li7200_Patm_raw = diff_press_raw    
+		'Get flow rate
+		VoltSe (flow_rate,1,mV5000,14,1,0,250,0.004325,0)
+		'5V=20L/min, 0V=0L/min updated on 23 Mar 
+
+    'Call Data Tables and Store Data
+
+    CallTable ts_data_60m
+
+    CallTable prop_wind_60m  '1min 05103 wind 
+    
+    'Load cov_in() array for the covariance computation.
+    cov_in(1) = Uz_60m
+    cov_in(2) = Ux_60m
+    cov_in(3) = Uy_60m
+    cov_in(4) = Ts_60m
+
+    CallTable comp_cov
+
+    If ( comp_cov.Output(1,1) ) Then
+
+      GetRecord (cov_out(1),comp_cov,1)
+
+      'The compass wind direction will be between 0 and 360 degrees.
+      sonic_WD_compass = (sonic_WD_compass + ANGLE_FROM_NORTH)
+      If ( sonic_WD_compass ) < 0 Then ( sonic_WD_compass = sonic_WD_compass + 360)
+      sonic_WD_compass = sonic_WD_compass MOD 360
+
+      '      'The CSAT3 wind direction will be between 0 to 180 degrees and 0 to -180 degrees
+      '      ' (0 to pi radians and 0 to -pi radians).
+      If ( wnd_dir_sonic ) > 180 Then ( wnd_dir_sonic = wnd_dir_sonic - 360 )
+      '
+      'Compute on-line flux_60mes.
+
+      Hs_60m(1) = rho_a * CP * Uz_60m_Ts_60m
+
+      tau_60m(1) = SQR ((Uz_60m_Ux_60m*Uz_60m_Ux_60m) + (Uz_60m_Uy_60m*Uz_60m_Uy_60m))
+      u_star_60m(1) = SQR (tau_60m(1))
+      tau_60m(1) = rho_a * tau_60m(1)
+
+    EndIf
+
+
+    CallTable flux_60m
+
+
+  NextScan
+
+  SlowSequence
+
+  Scan (1,Sec,3,0)
+    
+
+    BrHalf(prop_WD,1,mV5000,13,3,1,5000,True,0,250,355,0)
+    If prop_WD>=360 AND prop_WD<0  Then prop_WD=0
+
+		VoltSe(amb_press,1,mV5000,11,True,3000,_60Hz,.24,500)
+
+
+    'CNR4 Net Radiometer measurements 'ShortUp', 'ShortDn', 'LongUp', and 'LongDn'
+    VoltDiff(CNR4(1),4,mV20C,1,True,0,250,CNR4Mult(),0)
+    'CNR4 thermistor measurement 'CNR4TC'
+   Resistance(CNR4TC,1,mV200,5,Ix1,1,1675,True,True,0,_60Hz,1.0,0)
+    CNR4TC=CNR4TC/100
+    PRT(CNR4TC,1,CNR4TC,1,0)
+
+    'Calculate Kelvin temperature of CNR4
+    CNR4TK=CNR4TC+273.15
+    'Calculate temperature corrected long-wave radiation
+    LongUpCo=LongUp+5.67e-8*CNR4TK^4
+    LongDnCo=LongDn+5.67e-8*CNR4TK^4
+    'Calculate short-wave net radiation
+    Short_R_Net=ShortUp-ShortDn
+    'Calculate long-wave net radiation
+    Long_R_Net=LongUp-LongDn
+    'Calculate albedo
+    Albedo=ShortDn/ShortUp
+    'Calculate net radiation
+    Total_Net_R=Short_R_Net+Long_R_Net
+
+'
+  NextScan
+EndProg

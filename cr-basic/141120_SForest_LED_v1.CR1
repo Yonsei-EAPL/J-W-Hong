@@ -1,0 +1,55 @@
+'CR1000 Series Datalogger
+'To create a different opening program template, type in new
+'instructions and select Template | Save as Default Template
+'date:
+'program author:
+
+'Declare Public Variables
+'Example:
+Public PTemp, batt_volt
+
+Public LED(8)
+
+'Declare Other Variables
+'Example:
+'Dim Counter
+
+'Declare Constants
+'Example:
+'CONST PI = 3.141592654	
+
+'Define Data Tables.
+DataTable (LED_dat_10m,1,-1) 'Set table size to # of records, or -1 to autoallocate.
+	DataInterval (0,10,min,10)
+	
+  Average (1,LED(1),IEEE4,False)
+  Average (1,LED(2),IEEE4,False)
+  Average (1,LED(3),IEEE4,False)
+  Average (1,LED(4),IEEE4,False)
+  Average (1,LED(5),IEEE4,False)
+  Average (1,LED(6),IEEE4,False)
+  Average (1,LED(7),IEEE4,False)
+  Average (1,LED(8),IEEE4,False)
+
+EndTable
+
+'Define Subroutines
+'Sub
+	'EnterSub instructions here
+'EndSub
+
+'Main Program
+BeginProg
+	Scan (1,Sec,0,0)
+		PanelTemp (PTemp,250)
+		Battery (batt_volt)
+		
+		VoltSe(LED(1),8,mv5000,1,True,0,_60Hz,1,0) 
+		
+		'Enter other measurement instructions
+		'Call Output Tables
+		'Example:
+		CallTable LED_dat_10m
+	NextScan
+EndProg
+

@@ -1,0 +1,226 @@
+'Program name: L:\LOGGERPROGRAM\DK\MT_CR23X_Slow\MT_23X_070827.CR3
+'Date written: 2007-10-09
+'Transform Version: 0.5
+'Transform file: C:\Program Files\Campbellsci\LoggerNet\CR23X.TRN Version: 1.0
+'
+'This program was converted from L:\LOGGERPROGRAM\DK\MT_CR23X_Slow\MT_23X_070827.csi
+'using Campbell Scientific's Transformer application.
+'
+'CRBasic angle units are in Radians by default.
+'Switch to Degrees as CR23X used Degrees.
+AngleDegrees
+'
+' Declare array of flags as the CR23X had.
+Public Flag(18) As Boolean
+
+'{CR23X}
+
+'\\\\\\\\\\\\\\\\\\\\\\\\\ DECLARATIONS /////////////////////////
+
+Public airT_6m
+Public airT_9m
+Public airT_18m
+Public airT_30m
+Public airT_39m
+Public airT_surf
+Public RH_6m
+Public RH_9m
+Public RH_18m
+Public RH_30m
+Public RH_39m
+Public RH_surf
+Public wind_6m
+Public wind_9m
+Public wind_18m
+Public wind_30m
+
+
+Public qt_microM
+Public qt_molem2
+Public raingage
+Public raintotal
+'Public RS_Ro
+Public Temp_deg
+Public Temp_Kel
+Public scratch
+Public T_4
+Public Rsdn 'cm3up_w 
+Public Rsup 'cm3dn_w
+Public Rldn_Tem 'cg3up_Tem
+Public Rlup_Tem 'cg3dn_Tem
+Public st_temp
+Public stv
+Public Rldn 'cg3up_w
+Public Rlup 'cg3dn_w 
+Public albedo
+Public SWTot
+Public LWTot
+Public NetRad
+Public Battery
+
+Public R_therm
+Const A = 0.00103488
+Const B = 0.000238291
+Const C = 0.000000159
+
+
+'\\\\\\\\\\\\\\\\\\\\\\\\ OUTPUT SECTION ////////////////////////
+
+DataTable(Table5,true,-1)
+	OpenInterval
+	DataInterval(0,5,Min,10)
+	StdDev(1, Rsdn ,FP2,0)
+	Average(1, Rsdn , FP2, 0)
+	Average(1, Rldn , FP2, 0)
+	Average(1, Rsup , FP2, 0)
+	Average(1, Rlup , FP2, 0)
+	Average(1, albedo, FP2, 0)
+	Average(1, SWTot, FP2, 0)
+	Average(1, LWTot, FP2, 0)
+	Average(1, NetRad, FP2, 0)
+	Average(1, airT_39m, FP2, 0)
+	Average(1, RH_39m, FP2, 0)
+	Average(1, airT_30m, FP2, 0)
+	Average(1, RH_30m, FP2, 0)
+	Average(1, airT_18m, FP2, 0)
+	Average(1, RH_18m, FP2, 0)
+	Average(1, airT_9m, FP2, 0)
+	Average(1, RH_9m, FP2, 0)
+	Average(1, airT_6m, FP2, 0)
+	Average(1, RH_6m, FP2, 0)
+	Average(1, airT_surf, FP2, 0)
+	Average(1, RH_surf, FP2, 0)
+
+	Average(1, wind_30m, FP2, 0)
+	Average(1, wind_18m, FP2, 0)
+	Average(1, wind_9m, FP2, 0)
+	Average(1, wind_6m, FP2, 0)
+	Totalize(1,raingage, FP2, 0)
+	Average(1, qt_microM, FP2, 0)
+	Totalize(1, qt_molem2, FP2, 0)
+EndTable
+DataTable(Table30,true,-1)
+	OpenInterval
+	DataInterval(0,30,Min,10)
+	StdDev(1, Rsdn ,FP2,0)
+	Average(1, Rsdn , FP2, 0)
+	Average(1, Rldn , FP2, 0)
+	Average(1, Rsup , FP2, 0)
+	Average(1, Rlup , FP2, 0)
+	Average(1, albedo, FP2, 0)
+	Average(1, SWTot, FP2, 0)
+	Average(1, LWTot, FP2, 0)
+	Average(1, NetRad, FP2, 0)
+	Average(1, airT_39m, FP2, 0)
+	Average(1, RH_39m, FP2, 0)
+	Average(1, airT_30m, FP2, 0)
+	Average(1, RH_30m, FP2, 0)
+	Average(1, airT_18m, FP2, 0)
+	Average(1, RH_18m, FP2, 0)
+	Average(1, airT_9m, FP2, 0)
+	Average(1, RH_9m, FP2, 0)
+	Average(1, airT_6m, FP2, 0)
+	Average(1, RH_6m, FP2, 0)
+	Average(1, airT_surf, FP2, 0)
+	Average(1, RH_surf, FP2, 0)
+	
+	Average(1, wind_30m, FP2, 0)
+	Average(1, wind_18m, FP2, 0)
+	Average(1, wind_9m, FP2, 0)
+	Average(1, wind_6m, FP2, 0)
+	Sample(1, raintotal, FP2)
+	Average(1, qt_microM, FP2, 0)
+	Totalize(1, qt_molem2, FP2, 0)
+EndTable
+
+'\\\\\\\\\\\\\\\\\\\\\\\\\ SUBROUTINES //////////////////////////
+
+
+'\\\\\\\\\\\\\\\\\\\\\\\\\\\ PROGRAM ////////////////////////////
+
+BeginProg
+
+	Scan(1,Sec, 100, 0)
+		PortSet(1, 1)
+		PortSet(2, 1)
+		Delay(0,150,MSEC)
+		VoltSE(airT_6m, 1, mV1000, 1, False, 0, 250, 0.1, -40)
+		VoltSE(RH_6m, 1, mV1000, 2, False, 0, 250, 0.1, 0)
+		VoltSE(airT_9m, 1, mV1000, 3, False, 0, 250, 0.1, -40)
+		VoltSE(RH_9m, 1, mV1000, 4, False, 0, 250, 0.1, 0)
+		VoltSE(airT_18m, 1, mV1000, 5, False, 0, 250, 0.1, -40)
+		VoltSE(RH_18m, 1, mV1000, 6, False, 0, 250, 0.1, 0)
+		VoltSE(airT_30m, 1, mV1000, 7, False, 0, 250, 0.1, -40)
+		VoltSE(RH_30m, 1, mV1000, 8, False, 0, 250, 0.1, 0)
+		VoltSe(airT_39m, 1, mV1000, 9, False, 0, 250, 0.1, -40)
+		VoltSE(RH_39m, 1, mV1000, 10, False, 0, 250, 0.1, 0)
+		VoltSE(airT_surf, 1, mV1000, 11, False, 0, 250, 0.1, -40)
+		VoltSE(RH_surf, 1, mV1000, 12, False, 0, 250, 0.1, 0)
+		PortSet(1, 0)
+		PortSet(2, 0)
+		
+		BrHalf3W (R_therm,1,mv5000,13,Vx4,1,2000,True ,0,250,10000,0)
+
+		Temp_deg = ( 1 / ( A + B * (LN(R_therm)) + C * (LN(R_therm))^3 ))  -273.15
+		
+'		BrFull6W(RS_Ro, 1, mV50, mV50, 7, VX4, 1, 4200, true, true, 0, _60Hz,  1000, 0)
+'		PRT(Temp_deg,1,RS_Ro,1,0)
+		Temp_Kel = Temp_deg + 273.15
+		scratch = 4
+		T_4 = Temp_Kel ^ scratch
+		VoltSe(Rsdn, 1, mV50, 17, False, 0, _60Hz, 102.46, 0)
+		VoltSe(Rsup, 1, mV50, 19, False, 0, _60Hz, 102.46, 0)
+		VoltSe(Rldn_Tem, 1, mV50, 18, False, 0, _60Hz, 102.46, 0)
+		VoltSe(Rlup_Tem, 1, mV50, 20, False, 0, _60Hz, 102.46, 0)
+		st_temp = 5.67*(10^(-8))
+		stv = st_temp * T_4
+		Rldn = Rldn_Tem + stv
+		Rlup = Rlup_Tem + stv
+'		If (Rsdn < 0) Then
+'			Rsdn = Rsdn * 0
+'		EndIf
+'		If (Rsup < 0) Then
+'			Rsup = Rsup * 0
+'		EndIf
+		albedo = Rsup / Rsdn
+		SWTot = Rsdn - Rsup
+		LWTot = Rldn_Tem - Rlup_Tem
+		NetRad = SWTot + LWTot
+		VoltDiff(qt_microM, 1, mV50, 11, true, 0, _60Hz, 269.65, 0)
+		qt_molem2 = qt_microM * 0.00003
+
+		PulseCount(wind_6m, 1, 1, 1, 1, 0.75, 0.2)
+		PulseCount(wind_9m, 1, 2, 1, 1, 0.75, 0.2)
+		PulseCount(wind_18m, 1, 3, 1, 1, 0.75, 0.2)
+		PulseCount(wind_30m, 1, 4, 1, 1, 0.75, 0.2)
+
+		If (wind_6m = 0.2) Then
+			wind_6m = 0
+		EndIf
+		If (wind_9m = 0.2) Then
+			wind_9m = 0
+		EndIf
+		If (wind_18m = 0.2) Then
+			wind_18m = 0
+		EndIf
+		If (wind_30m = 0.2) Then
+			wind_30m = 0
+		EndIf
+	
+			PulseCount(raingage, 1, 18, 2, 0, 0.254, 0)
+		raintotal = raingage + raintotal
+		Battery(Battery)
+		SW12 (1,1 )
+		SW12 (2,1 )
+
+		CallTable Table5
+		CallTable Table30
+
+
+		If  TimeIntoInterval(0,30,Min) Then
+			raintotal = 0
+		EndIf
+
+
+	NextScan
+EndProg

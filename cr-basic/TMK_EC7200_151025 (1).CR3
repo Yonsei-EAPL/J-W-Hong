@@ -1,0 +1,960 @@
+'CR3000 Series Datalogger
+
+'Copyright (c) 2002 Campbell Scientific, Inc. All rights reserved.
+
+'1 Jan 2005  Original version 2.0
+'5 May 2010  Jaeill Yoo modified the original code for CRDS-CPEC.
+'7 Sep 2010  Jaeill Yoo add codes for RMYoung81000
+'7 Sep 2010  Jaeill Yoo added codes for Landfill measurement
+'16 Mar 2011 Jaeill Yoo modified codes for recording voltage according 
+'                       to change in analog output. 
+'21 Mar 2011 Jewoo Hong modified the units and typos, added extra statistics
+'                       such as minimum of concentration, T_in, P_in
+'6 Apr 2011 Jaeill Yoo added LI7200(Li-cor): ts_data only
+'31 May 2011 Jaeill removed LI7700 part and update direction of CSAT, reduced buffer size
+'                   and seperate slow response sequence.  MXP4115 for atmospheric pressure
+'28 Jul 2011 Jaeill modified analog output range of CH4(-12.5~125ppm)
+'6 Nov 2012 Juyeol modified li7200 and csat3 only
+
+'*** Sensors ****
+'3D Sonice anemometer   CSAT3(SN:2073)		three dimensional sonic anemometer
+'Gas analyzer           LI7200 (SN:0195)
+'Datalogger 						CR3000(SN:5426)
+
+
+
+
+'*** Description ****
+' The sign convention for the fluxes is positive away from the surface and negative
+'toward the surface.
+
+
+'*** Unit Definitions ***
+'Units		Units
+'C				Celsius
+'K        Kelvin
+'degrees	degrees (angle)
+'J				Joules
+'kPa			kilopascals
+'m				meters
+'cm       centimeters
+'mm       millimeters
+'kg				kilograms
+'g				grams
+'mg				milligrams
+'ug       micrograms
+'L        liters
+'mol			moles
+'mmol			millimoles
+'umol			micromoles
+'min      minutes
+'s				seconds
+'V				volts
+'mV       millivolts
+'W				Watts
+'ppm      parts per million
+
+
+'*** Program Control Flags ***
+' The Program Control Menu allows the station operator to conveniently change the
+'status of the program control Flags using the CR5000 keyboard display.
+
+'Save Fluxes?			"Yes" (default) process flux data.
+'{save_flx_flag_on}		"No" do not process flux data.
+'
+'Save Time Series?		"Yes" (default) save time series data.
+'{save_ts_flag_on}		"No" stop collecting time series data.
+
+
+'*** Wiring ***
+'Analog input
+
+'5H(SE9) - 
+'5L(SE10) - 
+'gnd
+'6H(SE11) - 
+'6L(SE12) - 
+'gnd - 
+'7H(SE13) - 
+'7L(SE14) - 
+'gnd
+'8H(SE15) - 
+'8L(SE16) - 
+'gnd
+'9H(SE17) -  
+'9L(SE18) -  
+'gnd - 
+'10H(SE19) - 
+'10L(SE20) - 
+'gnd - 
+'11H(SE21) - 
+'11L(SE22) -  
+'gnd -
+'12H(SE23) -   
+'12L(SE24) -  
+'gnd
+'13H(SE25)- 
+'13L(SE26)
+'gnd
+'14H(SE27) - 
+'14L(SE28) - 
+
+'SDM channel
+'SDM-C1	- green(from CSAT3) 
+'         blue(from LI7200)	
+'SDM-C2 - white(from CSAT3)
+'         white(from LI7200)
+'SDM-C3 - brown(from CSAT3)
+'         brown(from LI7200)
+
+'Control I/O
+'C1 - 
+'G - 
+'C2 - 
+'G - 
+'C3 - 
+'C5 - 
+'G - 
+
+'Extiation
+'IX1 - 
+'IXR - 
+
+
+'POWER OUT
+'12V    - 
+'5V		  - 
+'G		  - 
+'       - 
+
+'POWER IN - from terminal board
+'12V
+'G
+
+
+'EXTERNAL POWER SUPPLY
+'POS		CSAT3 power (red)
+'		CR3000 (red)
+'NEG		CSAT3 power reference (black)
+'		CSAT3 power shield (clear)
+'		CR3000 (black)
+
+'Compass azimuth of the -x axis.  For the figure
+' below, CSAT3_AZIMUTH = 90.
+' () -> Compass coordinate system
+' {} -> Right handed coordinate system aligned to north
+'
+'
+'                                (N)
+'                               {-y}
+'                                |
+'                                |
+'                                |
+'                                |
+'                                |
+'                                |
+'              (W) {+x} --------[ ]----X---> {-x} (E)
+'                              / |      \
+'                    CSAT3 Block |      CSAT3 Transducers
+'                                |
+'                                |
+'                                v
+'                               {+y}
+'                               (S)
+'
+'The program computes the compass wind direction, using the constant
+' CSAT3_AZIMUTH, and a CSAT3 wind direction.  Good CSAT3 wind directions
+' are between -90 to 0 and 0 to 90 degrees, e.g. the wind is blowing into
+' the CSAT3 sensor head.
+
+'Port control
+'Mode							C1 port		C2 port
+'0(sample)				L					L
+'2(CO2/CH4 span)	H					L
+'3(H2O span)			L					H
+'4(zero)					H					H
+
+''*** Constants ***
+'Public csat3_azimuth                       'Enter sonic azimuth using keyboard after program has compiled (azimuth of the CSAT3(A) negative x-axis see Section 3.2.1 CSAT3A Azimuth in the OPEC manual).
+'Dim sonic_azimuth_prev
+'Dim sys_conf_var_file As Long                            'Filehandle for the file that contains the system configuration variables in the CPU.
+
+'Const PI = 3.141592654			'the ratio of the circumference of a circle to its diameter
+'Const TUBE_LENGTH = 13.09 	'tube length in meters
+'Const TUBE_DIAMETER = 0.005	'tube inner diameter in meters
+'Const TUBE_FLOWRATE = 10		'Target flow rate in L/min
+'Const EST_DELAY = PI*(TUBE_DIAMETER/2)^2*TUBE_LENGTH * 1000 / TUBE_FLOWRATE * 60  'Estimated delay time in seconds
+Const CSAT3_AZIMUTH = 300		'Heading of CSAT3 transducers   '???
+Const SCAN_INTERVAL = 100	  '100 mSec(10Hz)		50 mSec(20Hz)
+Const OUTPUT_INTERVAL = 30	'Online flux data output interval in minutes.
+Const NUM_DAY_CPU = 14		  'Number of days of data to store on the CPU.
+Const NUM_DAY_CRD = 28		  'Number of days of data to store on the card.
+
+Const OFFSET = 16					'An offset delay that will be introduced to the CSAT3, LI-7200, and analog data.
+Const DELAY_CSAT = 2				'Fixed inherent lag of the CSAT3 databe
+Const DELAY_LI7200 = 3				 'For now we only consider time delay from SMD LI7200(0.3sec).
+
+'Determine scan buffer size, CSAT3 Execution Parameters and fixed lags for CSAT3 and LI-7500.
+Const SCAN_BUFFER_SIZE = 30*INT (1000/SCAN_INTERVAL)	'Compute a scan buffer that is 30 seconds in length.
+Const CSAT_OPT = INT (1000/SCAN_INTERVAL)			'Compute CSAT3 Exection Parameter (10 or 20 Hz).
+Const CSAT_REC_BCK = OFFSET - DELAY_CSAT		  'Number of records back to align CSAT3 data.
+Const LI7200_REC_BCK = OFFSET - DELAY_LI7200	'???  'Number of records back to align 7200 data.
+
+'Compute CPU and card storage size for the FLUX DataTables.
+Const FLUX_SIZE_CPU = (NUM_DAY_CPU*1440)/OUTPUT_INTERVAL	'Size of flux DataTable on CPU [days].
+Const FLUX_SIZE_CRD = (NUM_DAY_CRD*1440)/OUTPUT_INTERVAL	'Size of flux DataTable on card [days].
+
+Const CP = 1004.67  					'Estimate of heat capacity of air [J/(kg K)]
+Const LV = 2440						  	'Estimate of the latent heat of vaporization [J/g].
+Const MW_co2 = 44							'molecular weight of co2
+Const MW_h2o = 18							'molecular weight of h2o
+Const MW_ch4 = 16							'molecular weight of ch4
+Const MW_air = 28.8						'molecular weight of air
+Const MU_WPL = MW_air/MW_h2o	'Ratio of the molecular weight of dry air to that of water vapor.
+Const R = 8.3143e-3						'Universal gas constant [kPa m^3/(K mol) ].
+Const RD = R/MW_air						'Gas constant for dry air [J/(mg K)].
+Const RV = R/MW_h2o						'Gas constant for water vapor [J/(mg K)].
+
+'Custom Menu constants.
+Const YES = -1					'Yes is defined as -1 (TRUE).
+Const NO = 0						'No is defined as 0 (FALSE).
+
+
+
+'*** Variables ***
+
+'Online lagged CSAT3 and CRDS data.
+Dim cov_in(7)
+
+'Program Control flags.
+Public save_flx_flag_on
+Public save_ts_flag_on
+
+
+'Nonlagged CSAT3 data.
+Public wind_raw(5)
+Alias wind_raw(1) = Ux_raw
+Alias wind_raw(2) = Uy_raw
+Alias wind_raw(3) = Uz_raw
+Alias wind_raw(4) = Ts_raw
+Alias wind_raw(5) = diag_csat_raw
+
+Public wind(5)
+Alias wind(1) = Ux
+Alias wind(2) = Uy
+Alias wind(3) = Uz
+Alias wind(4) = Ts
+Alias wind(5) = diag_csat
+Units Ux = m/s
+Units Uy = m/s
+Units Uz = m/s
+Units Ts = degC
+
+
+'Nonlagged LI-7200 data
+Public li7200_raw(12)
+Alias li7200_raw(1) = li7200_co2_m_raw
+Alias li7200_raw(2) = li7200_h2o_m_raw
+Alias li7200_raw(3) = li7200_co2_d_raw
+Alias li7200_raw(4) = li7200_h2o_d_raw
+Alias li7200_raw(5) = li7200_agc_raw
+Alias li7200_raw(6) = li7200_Patm_raw
+Alias li7200_raw(7) = li7200_Tin_raw
+Alias li7200_raw(8) = li7200_Tout_raw
+Alias li7200_raw(9) = li7200_Tavg_Tin_Tout_raw
+Alias li7200_raw(10)= li7200_flowrate_raw
+
+
+Public li7200_(10)
+Alias li7200_(1) = li7200_co2_m
+Alias li7200_(2) = li7200_h2o_m
+Alias li7200_(3) = li7200_co2_d
+Alias li7200_(4) = li7200_h2o_d
+Alias li7200_(5) = li7200_agc
+Alias li7200_(6) = li7200_Patm
+Alias li7200_(7) = li7200_Tin
+Alias li7200_(8) = li7200_Tout
+Alias li7200_(9) = li7200_Tavg_Tin_Tout
+Alias li7200_(10)= li7200_flowrate
+Units li7200_co2_m = umol/mol
+Units li7200_h2o_m = mmol/mol
+Units li7200_co2_d = mmol/m3
+Units li7200_h2o_d = mmol/m3
+Units li7200_agc = %
+Units li7200_Patm = kPa
+Units li7200_Tin = degC
+Units li7200_Tout = degC
+Units li7200_Tavg_Tin_Tout = degC
+Units li7200_flowrate = LPM
+
+'Nonlagged analog measurements.
+Public flow_rate_raw, flow_rate
+Units flow_rate = L/min
+Public panel_temp_raw, panel_temp
+Units panel_temp = degC
+
+'Nonlagged meteorological variables.
+Public batt_volt			'logger battery voltage.
+Units batt_volt = V
+
+
+'Flux variables.
+Dim Hs									'Sensible heat flux using sonic temperature.
+Dim Hc									'Sensible heat flux computed from Hs and LE_wpl.
+Dim tau									'Momentum flux.
+Dim u_star							'Friction velocity.
+
+Dim Fc_ga_li7200			'Carbon dioxide flux,
+Dim LE_ga_li7200			'Latent heat flux, 
+
+Public scan_count					'Number scans executed.
+Dim wind_east						'East wind in compass coordinate system.
+Dim wind_north					'North wind in compass coordinate system.
+Dim even_min_flag_on		'Used to synchronize the time series output to the even minute.
+Dim dly_data_out(22)		'Variable used to temporarily store the lagged record.
+Dim one_more_record			'Used to write one more time series record with a file mark.
+Dim rho_d_mean					'Density of dry air used in Webb et al. term in g/m3
+Dim rho_a_mean					'Density of wet air used in Webb et al. term in g/m3
+Dim rho_v_mean				  'Water vapor density.
+
+Units Hs = W/m^2
+Units Hc = W/m^2
+Units tau = kg/(m s^2)
+Units u_star = m/s
+
+Units Fc_ga_li7200 = mg/(m^2 s)
+Units LE_ga_li7200 = W/m^2
+
+Dim Ts_absolute
+Public Tc
+
+'Aliases for covariances.  
+Dim cov_out(40)			'Covariances of wind and CPEC(1-21) / wind vector and averag(29-44).
+Alias cov_out(1) = cov_Ux_Ux
+Alias cov_out(2) = cov_Ux_Uy
+Alias cov_out(3) = cov_Ux_Uz
+Alias cov_out(4) = cov_Ux_Ts
+Alias cov_out(5) = cov_Ux_Tc
+Alias cov_out(6) = cov_Ux_co2_m
+Alias cov_out(7) = cov_Ux_h2o_m
+Alias cov_out(8) = cov_Uy_Uy
+Alias cov_out(9) = cov_Uy_Uz
+Alias cov_out(10) = cov_Uy_Ts
+Alias cov_out(11) = cov_Uy_Tc
+Alias cov_out(12) = cov_Uy_co2_m
+Alias cov_out(13) = cov_Uy_h2o_m
+Alias cov_out(14) = cov_Uz_Uz
+Alias cov_out(15) = cov_Uz_Ts
+Alias cov_out(16) = cov_Uz_Tc
+Alias cov_out(17) = cov_Uz_co2_m
+Alias cov_out(18) = cov_Uz_h2o_m
+Alias cov_out(19) = cov_Ts_Ts
+Alias cov_out(20) = cov_Ts_Tc
+Alias cov_out(21) = cov_Ts_co2_m
+Alias cov_out(22) = cov_Ts_h2o_m
+Alias cov_out(23) = cov_Tc_Tc
+Alias cov_out(24) = cov_Tc_co2_m
+Alias cov_out(25) = cov_Tc_h2o_m
+Alias cov_out(26) = cov_co2_m_co2_m
+Alias cov_out(27) = cov_co2_m_h2o_m
+Alias cov_out(28) = cov_h2o_m_h2o_m
+Units cov_Ux_Ux = (m/s)^2
+Units cov_Ux_Uy = (m/s)^2
+Units cov_Ux_Uz = (m/s)^2
+Units cov_Ux_Ts = (m/s)degC
+Units cov_Ux_Tc = (m/s)degC
+Units cov_Ux_co2_m = mg/m^2/s
+Units cov_Ux_h2o_m = g/m^2/s
+Units cov_Uy_Uy = (m/s)^2
+Units cov_Uy_Uz = (m/s)^2
+Units cov_Uy_Ts = (m/s)^2
+Units cov_Uy_Tc = (m/s)^2
+Units cov_Uy_co2_m = mg/m^2/s
+Units cov_Uy_h2o_m = g/m^2/s
+Units cov_Uz_Uz = (m/s)^2
+Units cov_Uz_Ts = (m/s)degC
+Units cov_Uz_Tc = (m/s)degC
+Units cov_Uz_co2_m = mg/m^2/s
+Units cov_Uz_h2o_m = g/m^2/s
+Units cov_Ts_Ts = (degC)^2
+Units cov_Ts_Tc = (degC)^2
+Units cov_Ts_co2_m = degC mg/m^3
+Units cov_Ts_h2o_m = degC g/m^3
+Units cov_Tc_Tc = (degC)^2
+Units cov_Tc_co2_m = degC mg/m^3
+Units cov_Tc_h2o_m = degC g/m^3
+Units cov_co2_m_co2_m = (mg/m^3)^2
+Units cov_co2_m_h2o_m = mg g/m^6
+Units cov_h2o_m_h2o_m = (g/m^3)^2
+
+'Wind directions and speed.
+Alias cov_out(31) = wnd_dir_compass
+Alias cov_out(33) = wnd_spd
+Alias cov_out(34) = rslt_wnd_spd
+Alias cov_out(35) = wnd_dir_csat3
+Alias cov_out(36) = std_wnd_dir
+
+Alias cov_out(37) = Tc_mean
+Alias cov_out(38) = co2_mean
+Alias cov_out(39) = h2o_mean
+Alias cov_out(40) = amb_press_mean  
+
+Units wnd_dir_compass = degrees
+Units wnd_spd = m/s
+Units rslt_wnd_spd = m/s
+Units wnd_dir_csat3 = degrees
+Units std_wnd_dir = degrees
+Units Tc_mean = degC
+Units co2_mean = ppm
+Units h2o_mean = mmol/mol
+Units amb_press_mean = kPa
+
+
+'Diagnostic variables.
+Dim n						'Number of samples in the online covariances.
+Dim disable_flag_on(3)
+'disable_flag_on(1)	'TRUE when CSAT3 diagnostic warning flags are on or CSAT3 has no data.
+'disable_flag_on(2)	'TRUE when LI-7500 diagnostic warning flags are on or LI-7500 failed to send data.
+'disable_flag_on(3)	'TRUE when CSAT3 diagnostic warning flags are on.
+						' Used to filter the sum of CSAT3 diagnostic warning flags.
+'disable_flag_on(4)			'TRUE when LI-7500 diagnostic warning flags are on.
+							' Used to filter the sum of LI-500 diagnostic warning flags.
+Public diag_bits(4)				'Warning flags.
+Alias diag_bits(1) = del_T_f		'Delta temperature warning flag.
+Alias diag_bits(2) = sig_lck_f	'Poor signal lock warning flag.
+Alias diag_bits(3) = amp_h_f		'Amplitude high warning flag.
+Alias diag_bits(4) = amp_l_f		'Amplitude low warning flag.
+'*** Final Output Data Tables ***
+
+
+' slow sensors-----------------------------------
+Public Rain_mm
+
+Public CM3Up
+Public CM3Dn
+Public CG3Up
+Public CG3Dn
+Public CNR1TC
+Public CNR1TK
+Public NetRs
+Public NetRl
+Public Albedo
+Public UpTot
+Public DnTot
+Public NetTot
+Public CG3UpCo
+Public CG3DnCo
+
+Public soilheat_1,soilheat_2,soilheat_3
+
+Public PAR_Flux_Density
+Public PAR_Tot_flux
+Units PAR_Flux_Density=umol/s/m^2
+Units PAR_Tot_flux=mmol/m^2
+
+Public AirT,RH,amb_press, amb_press_raw, diff_press_raw, diff_press
+
+'Const amb_press = 101.3 'kPa   in case of no pressure sensor
+
+Public Wetness1, Wet_Day1
+Public Wetness2, Wet_Day2
+Public Wetness3, Wet_Day3
+Public Wetness4, Wet_Day4
+
+Public period_1, soilwtr_1
+Public period_2, soilwtr_2
+Public period_3, soilwtr_3
+Public period_4, soilwtr_4
+Public period_5, soilwtr_5
+Public period_6, soilwtr_6
+
+Public soiltemp_1,soiltemp_2
+
+
+'Online flux data.:KoFlux GDK file format
+DataTable (flux,true,FLUX_SIZE_CPU)
+	DataInterval (0,OUTPUT_INTERVAL,Min,10)
+	CardOut (0,1000000)    
+	
+
+	Sample (1,Fc_ga_li7200, IEEE4)
+	Sample (1,LE_ga_li7200, IEEE4)
+	Sample (1,Hs,IEEE4)
+	Sample (1,Hc,IEEE4)   
+	Sample (1,tau,IEEE4)
+	Sample (1,u_star,IEEE4)
+
+	Sample (1,cov_Ux_Ux,IEEE4)
+	Sample (1,cov_Ux_Uy,IEEE4)
+	Sample (1,cov_Ux_Uz,IEEE4)
+	Sample (1,cov_Ux_Ts,IEEE4)
+	Sample (1,cov_Ux_Tc,IEEE4)
+	Sample (1,cov_Ux_co2_m,IEEE4)
+	Sample (1,cov_Ux_h2o_m,IEEE4)
+	Sample (1,cov_Uy_Uy,IEEE4)
+	Sample (1,cov_Uy_Uz,IEEE4)
+	Sample (1,cov_Uy_Ts,IEEE4)
+	Sample (1,cov_Uy_Tc,IEEE4)
+	Sample (1,cov_Uy_co2_m,IEEE4)
+	Sample (1,cov_Uy_h2o_m,IEEE4)
+	Sample (1,cov_Uz_Uz,IEEE4)
+	Sample (1,cov_Uz_Ts,IEEE4)
+	Sample (1,cov_Uz_Tc,IEEE4)
+	Sample (1,cov_Uz_co2_m,IEEE4)
+	Sample (1,cov_Uz_h2o_m,IEEE4)
+	Sample (1,cov_Ts_Ts,IEEE4)
+	Sample (1,cov_Ts_Tc,IEEE4)
+	Sample (1,cov_Ts_co2_m,IEEE4)
+	Sample (1,cov_Ts_h2o_m,IEEE4)
+	Sample (1,cov_Tc_Tc,IEEE4)
+	Sample (1,cov_Tc_co2_m,IEEE4)
+	Sample (1,cov_Tc_h2o_m,IEEE4)
+	Sample (1,cov_co2_m_co2_m,IEEE4)
+	Sample (1,cov_co2_m_h2o_m,IEEE4)
+	Sample (1,cov_h2o_m_h2o_m,IEEE4)
+
+	Average (4,Ux,IEEE4,(NOT (save_flx_flag_on))	
+
+	Sample (1,Tc_mean,IEEE4)
+	Average (1,panel_temp,IEEE4,FALSE)	
+	Sample (1,wnd_dir_compass,IEEE4)
+	Sample (1,wnd_dir_csat3,IEEE4)
+	Sample (1,wnd_spd,IEEE4)
+	Sample (1,rslt_wnd_spd,IEEE4)
+	Average (1,batt_volt,IEEE4,FALSE)
+	Sample (1,std_wnd_dir,IEEE4)
+	Totalize (1,n,IEEE4,disable_flag_on(1)  OR NOT (save_flx_flag_on))
+  Totalize (1,n,IEEE4,NOT (disable_flag_on(1) XOR disable_flag_on(3)) OR NOT (save_flx_flag_on))
+  FieldNames ("csat_warnings")
+	Totalize (4,del_T_f,IEEE4,disable_flag_on(3) OR NOT (save_flx_flag_on))
+    
+  'LI7200
+	Average (10,li7200_co2_m,IEEE4,False)
+
+EndTable
+
+
+'Set "Save Time Series?" menu option to "Yes" to save time series data.
+DataTable (ts_data,even_min_flag_on,-1)
+	DataInterval (0,SCAN_INTERVAL,mSec,100)
+  TableFile("CRD:"&Status.SerialNumber(1,1)&".ts_data_",64,-1,0,20,Day,0,0)
+  '    CardOut (0,-1)
+	Sample (1,Ux,IEEE4)	
+	Sample (1,Uy,IEEE4)	
+	Sample (1,Uz,IEEE4)
+	Sample (1,Ts,IEEE4)
+	Sample (1,diag_csat,IEEE4)
+
+	Sample (1,li7200_co2_m, IEEE4)
+	Sample (1,li7200_h2o_m, IEEE4)
+	Sample (1,li7200_agc, IEEE4)
+	Sample (1,li7200_Patm, IEEE4)
+	Sample (1,li7200_Tin, IEEE4)
+	Sample (1,li7200_Tout, IEEE4)
+  Sample (1,li7200_flowrate, IEEE4)
+
+EndTable
+
+
+DataTable (dat_30m,TRUE,-1)
+  DataInterval (0,30,min,100)
+  '  TableFile("CRD:"&Status.SerialNumber(1,1)&".dat_30m_",64,-1,0,30,Day,0,0)
+  '   CardOut (0,-1)   
+  CardOut (0,1000000)
+
+  Average (1,CM3Up,IEEE4,false)
+  Average (1,CM3Dn,IEEE4,false)
+  Average (1,CG3UpCo,IEEE4,false)
+  Average (1,CG3DnCo,IEEE4,false)
+
+  Average (1,NetRs,IEEE4,false)
+  Average (1,NetRl,IEEE4,false)
+  Average (1,Albedo,IEEE4,false)
+  Average (1,UpTot,IEEE4,false)
+
+  Average (1,DnTot,IEEE4,false)
+  Average (1,NetTot,IEEE4,false)
+
+  Average (1,soilheat_1,IEEE4,false)
+  Average (1,soilheat_2,IEEE4,false)
+  Average (1,soilheat_3,IEEE4,false)
+
+  Totalize (1,Rain_mm,FP2,False)
+
+  Average(1,PAR_Flux_Density,FP2,False)
+  Maximum(1,PAR_Flux_Density,FP2,False,False)
+  Minimum(1,PAR_Flux_Density,FP2,False,False)
+  Totalize(1,PAR_Tot_flux,IEEE4,False)
+
+  Average (1,AirT,FP2,false)
+  Average (1,RH,FP2,false)
+
+  Sample (1,Wet_Day1,IEEE4)
+  Sample (1,Wet_Day2,IEEE4)
+  Sample (1,Wet_Day3,IEEE4)
+  Sample (1,Wet_Day4,IEEE4)
+
+  Average (1,soilwtr_1,IEEE4,false)
+  Average (1,soilwtr_2,IEEE4,false)
+  Average (1,soilwtr_3,IEEE4,false)
+  Average (1,soilwtr_4,IEEE4,false)
+  Average (1,soilwtr_5,IEEE4,false)
+  Average (1,soilwtr_6,IEEE4,false)
+
+  Average (1,soiltemp_1,IEEE4,false)
+  Average (1,soiltemp_2,IEEE4,false)
+
+EndTable
+
+'*** Working Data Tables ***
+
+'Reorder the data and prepare to lag all the data.
+DataTable (dly_data,TRUE,OFFSET)
+	Sample (5,Ux_raw,IEEE4)
+
+	Sample (1,flow_rate_raw,IEEE4)
+	Sample (1,panel_temp_raw,IEEE4)
+	Sample (10,li7200_raw(1),IEEE4)
+	Sample (1,amb_press_raw,IEEE4)
+EndTable
+
+
+'Compute the covariances of Uz, co2, h2o, and Ts, as well as the other cross
+'products, required to rotate the data into natural wind coordinates.
+'This data is output every OUTPUT_INTERVAL minutes.
+DataTable (comp_cov,TRUE,1)
+	DataInterval (0,OUTPUT_INTERVAL,min,1)
+	Covariance (7,cov_in(1),IEEE4,NOT (save_flx_flag_on),21)		'cov_out(1-28)
+	WindVector (1,wind_east,wind_north,IEEE4,NOT (save_flx_flag_on),0,1,2)   'cov_out(29-32)
+	WindVector (1,Uy,Ux,IEEE4, NOT (save_flx_flag_on),0,1,2)                 'cov_out(33-36)
+	Average (1,Tc,IEEE4, NOT (save_flx_flag_on))											'cov_out(37)  
+	Average (1,li7200_co2_m,IEEE4, NOT (save_flx_flag_on))											'cov_out(38)
+	Average (1,li7200_h2o_m,IEEE4, NOT (save_flx_flag_on))											'cov_out(39)
+	Average (1,amb_press,IEEE4, NOT (save_flx_flag_on))							      	'cov_out(40)  
+EndTable
+
+
+'*** Define Program Control Menu ***
+DisplayMenu ("Program Control",TRUE)
+	MenuItem ("Save Fluxes?",save_flx_flag_on)
+	MenuPick (YES,NO)
+	MenuItem ("Save Time Series?",save_ts_flag_on)
+	MenuPick (YES,NO)
+EndMenu
+
+'*** Program ***
+BeginProg
+	'set the variables
+	scan_count = 0
+	n = 1
+'	bb = 1
+'
+'  sys_conf_var_file = FileOpen ("CPU:sys_conf_var.dat","rb",0) 'Check if a file exists.
+'  FileClose (sys_conf_var_file)
+'
+'  If ( sys_conf_var_file = 0 ) Then
+'    Calfile (sonic_azimuth,1,"CPU:sys_conf_var.dat",0) 'Store the default values to the file.
+'  EndIf
+'  Calfile (sonic_azimuth,1,"CPU:sys_conf_var.dat",1) 'Read the values from the file.
+'  sonic_azimuth_prev = sonic_azimuth
+
+
+	'Save fluxes on compile.
+	save_flx_flag_on = TRUE
+	'Save time series on compile.
+	save_ts_flag_on = TRUE
+
+	'Set all CSAT3 and Gas analyzer variables to NaN.
+	Move (Ux_raw,5,NaN,1)
+	Move (li7200_raw,10,NaN,1)
+
+ 'Set the SDM clock speed.
+  SDMSpeed (30)
+
+	Scan (SCAN_INTERVAL,mSec,SCAN_BUFFER_SIZE,0)
+	
+		'SCANNING SENSORS ++++++++++++++++++++++++++++
+		'logger panel temperature.
+		PanelTemp (panel_temp_raw,250)
+
+		'Get CSAT3 wind and sonic temperature data.
+    CSAT3 (Ux_raw,1,3,91,CSAT_OPT)
+
+		'Get LI7200 data
+		LI7200 (li7200_raw(1),1,1,3)		'to get diff pressure only in 6th array
+    'twelve data out (co2 dry/h2o dry/co2/h2o/AGC/Ptot/T_in/T_out/AUX1/AUX2/AUX3/AUX4)
+    diff_press_raw = li7200_raw(6)      
+
+		'Get LI7200 data
+		LI7200 (li7200_raw(1),1,1,2)		
+    'ten data out (co2 dry/h2o dry/co2/h2o/AGC/Ptot/T_in/T_out/T_AVG/AUX1)
+    amb_press_raw = li7200_Patm_raw = diff_press_raw
+
+		'Get flow rate
+		VoltSe (flow_rate_raw,1,mV5000,11,1,0,250,0.004325,0)
+		'5V=20L/min, 0V=0L/min updated on 23 Mar 2011
+
+		
+		'End of Sensor Scanning +++++++++++++++++++++++++++++++
+
+
+		'Lag the CSAT3, LI7200, and analog measurements.
+		CallTable dly_data
+
+
+		If ( scan_count >= OFFSET ) Then
+			'Load in CSAT3 Data that has been lagged by CSAT_REC_BCK scans.
+			GetRecord (dly_data_out(1),dly_data,CSAT_REC_BCK)
+			Move (Ux,5,dly_data_out(1),5)		'Uz, Ux, Uy, Ts, diag
+			
+      Ts_absolute = Ts+273.15
+
+			'Load in the analog data that has been lagged by OFFSET scans.
+			GetRecord (dly_data_out(1),dly_data,OFFSET)
+			Move (flow_rate,1,dly_data_out(6),1)	'flow rate
+			Move (panel_temp,1,dly_data_out(7),1)	'panel_temp
+			
+
+			'Load in the LI7200 data that has been lagged by LI7200_REC_BCK scans.
+			GetRecord (dly_data_out(1),dly_data,LI7200_REC_BCK)
+			Move (li7200_co2_m,10,dly_data_out(8),10)		'get data from LI7200
+      Move (amb_press,1,dly_data_out(18),1) 
+      
+      'Compute fast response air temperature from sonic temperature and EC155 vapor molar mixing ratio.
+      Tc = (Ts_absolute/(1+0.32*li7200_h2o_m/(1000+li7200_h2o_m)))-273.15 'Kaimal and Gaynor (1991) Eq. (3).
+
+
+'						
+'			'copy data to temporary space for covariance
+			cov_in(1)=Ux
+			cov_in(2)=Uy
+			cov_in(3)=Uz
+			cov_in(4)=Ts
+			cov_in(5)=Tc
+			cov_in(6)=li7200_co2_m
+			cov_in(7)=li7200_h2o_m
+		
+			'Copy and convert CSAT3 for compass wind vector computation.
+			wind_east = -1*Uy
+			wind_north = Ux
+
+			'CSAT Diagnotics**************
+			'Define 61502 as NaN.
+      If ( diag_csat = NaN ) Then ( diag_csat = 61502 )
+
+     'Break up the four CSAT3 warning flags into four separate bits.
+      del_T_f = (diag_csat AND &h8000)/&h8000
+      sig_lck_f = (diag_csat AND &h4000)/&h4000
+      amp_h_f = (diag_csat AND &h2000)/&h2000
+      amp_l_f = (diag_csat AND &h1000)/&h1000
+
+     'Turn on the intermediate processing disable flag when any CSAT3 warning flag is
+     ' high, including the special cases NaN (61502), a Lost Trigger (61440), No Data
+     ' (61503), an SDM error (61441), or wrong CSAT3 embedded code (61442).
+      If ( diag_csat AND &hf000 ) Then
+        disable_flag_on(1) = TRUE
+      Else
+        disable_flag_on(1) = FALSE
+      EndIf
+
+    'Turn on only when CSAT3 diagnostic warning flags are set.
+     If ( (diag_csat AND &hf000) = &hf000 ) Then
+       disable_flag_on(3) = TRUE
+     Else
+       disable_flag_on(3) = FALSE
+
+     EndIf
+
+     'Save the four most significant bits of the CSAT3 diagnostics, except for the
+     ' special cases NaN (61502), a Lost Trigger (61440), No Data (61503), an SDM
+     ' error (61441), or wrong CSAT3 embedded code (61442).
+      If ( diag_csat < &hf000 ) Then ( diag_csat = INT ((diag_csat AND &hf000)/&h1000) )
+
+
+			'Write a file mark to the time series table every hour.  The filemark is written
+			' only to the card if time series data are being stored.
+			If ( (even_min_flag_on) AND (IfTime (0,60,Min)) ) Then ( FileMark (ts_data) )
+
+			'Start saving the time series data on an even minute boundary.
+			If ( (save_ts_flag_on) AND (NOT (even_min_flag_on)) ) Then
+				If ( IfTime (0,1,Min) ) Then ( even_min_flag_on = TRUE )
+			Else
+				If ( (NOT (save_ts_flag_on)) AND (even_min_flag_on) AND (NOT (one_more_record)) ) Then
+					FileMark (ts_data)
+					one_more_record = TRUE
+				Else
+					If (one_more_record) Then
+						one_more_record = FALSE
+						even_min_flag_on = FALSE
+					EndIf
+				EndIf
+			EndIf
+
+			'Save adjusted time series data.
+			CallTable ts_data
+			CallTable comp_cov
+
+			
+			If ( comp_cov.Output(1,1) ) Then
+						
+				GetRecord (cov_out(),comp_cov,1)
+
+				'Compass wind direction will be between 0 and 360 degrees.
+				wnd_dir_compass = (wnd_dir_compass + CSAT3_AZIMUTH) MOD 360
+				'CSAT3 wind direction will be between 0 to 180 degrees and 0 to -180 degrees.
+				If ( wnd_dir_csat3 ) > 180 Then ( wnd_dir_csat3 = wnd_dir_csat3 - 360 )
+
+        rho_d_mean = amb_press_mean/(RD*(Tc_mean+273.15))*(1-(h2o_mean/(1000+h2o_mean)))
+        rho_v_mean = amb_press_mean*h2o_mean/(RV*(Tc_mean+273.15)*(1000+h2o_mean))
+        rho_a_mean = (rho_d_mean+rho_v_mean)/1000
+        'Compute a factor to change the EC155 statistics from molar mixing ratio to mass density.
+'        factor_CO2 = 0.044*amb_press_mean/(R*(Tc_mean+273.15))
+'        factor_H2O = 0.018*amb_press_mean/(R*(Tc_mean+273.15))
+
+        'Compute online fluxes.
+        Fc_ga_li7200 = cov_Uz_co2_m*0.044*amb_press_mean/(R*(Tc_mean+273.15))
+        LE_ga_li7200 = LV*cov_Uz_h2o_m*0.018*amb_press_mean/(R*(Tc_mean+273.15))
+                
+				Hs = rho_a_mean*CP*cov_Uz_Ts    
+				Hc = rho_a_mean*CP*cov_Uz_Tc    
+				
+				u_star = SQR (SQR ((cov_Ux_Uz*cov_Ux_Uz)+(cov_Uy_Uz*cov_Uy_Uz)))
+				tau = rho_a_mean * SQR ((cov_Ux_Uz*cov_Ux_Uz)+(cov_Uy_Uz*cov_Uy_Uz))				
+
+			EndIf
+
+			'Write a file mark to the flux table.
+'			If ( IfTime (0,1,Day) ) Then ( FileMark (flux) )
+			CallTable flux
+
+		Else
+			scan_count = scan_count + 1
+		EndIf		
+
+
+    'Rain Gauge measurement Rain_mm
+    PulseCount(Rain_mm,1,1,2,0,0.1,0)
+    
+    CallTable dat_30m
+	NextScan
+	
+	'Slow sequence======
+	SlowSequence
+	Scan(1,sec,20,0)
+
+	  'Measure battery voltage.
+		Battery (batt_volt)
+	
+
+'    'Update file if sonic azimuth has changed.
+'    If ( sonic_azimuth_prev <> sonic_azimuth ) Then
+'      sonic_azimuth_prev = sonic_azimuth
+'      Calfile (sonic_azimuth,1,"CPU:sys_conf_var.dat",0)  'Store the new value to the file.
+'    EndIf
+
+    '------- Slow sensors--------------------
+
+    VoltSe(CM3Up,1,mV50,1,0,0,_60Hz,50.4796,0)
+    VoltSe(CM3Dn,1,mV50,2,0,0,_60Hz,90.3342,0)
+    VoltSe(CG3Up,1,mV50,3,0,0,_60Hz,122.1001,0)
+    VoltSe(CG3Dn,1,mV50,4,0,0,_60Hz,91.4913,0)
+
+    If CM3Up <=0  Then CM3Up = 0
+    If CM3Dn <=0  Then CM3Dn = 0
+
+    Resistance(CNR1TC,1,mV200,3,Ix1,1,1675,True,True,0,_60Hz,1.0,0)
+    CNR1TC=CNR1TC/100
+    PRT(CNR1TC,1,CNR1TC,1,0)
+
+    CNR1TK=CNR1TC+273.18
+    NetRs=CM3Up-CM3Dn
+    NetRl=CG3Up-CG3Dn
+    Albedo=CM3Dn/CM3Up
+    UpTot=CM3Up+CG3Up
+    DnTot=CM3Dn+CG3Dn
+    NetTot=UpTot-DnTot
+    CG3UpCo=CG3Up+5.67*10^-8*CNR1TK^4
+    CG3DnCo=CG3Dn+5.67*10^-8*CNR1TK^4
+
+
+    '    'Measure soil heat flux w/HFT3
+    VoltSe(soilheat_1,1,mV20,7,0,0,_60Hz,15.4799,0)
+    VoltSe(soilheat_2,1,mV20,8,0,0,_60Hz,15.3610,0)
+    VoltSe(soilheat_3,1,mV20,9,0,0,_60Hz,15.4799,0)
+
+    'LI190SB Quantum Sensor measurements 'PAR_Tot_flux' and 'PAR_Flux_Density
+    VoltSe(PAR_Flux_Density,1,mV20,10,True,0,_60Hz,1,0)
+
+    If PAR_Flux_Density<0 Then PAR_Flux_Density=0
+    PAR_Tot_flux=PAR_Flux_Density*0.001*86.04   
+    PAR_Flux_Density=PAR_Flux_Density*86.04       '1000/7.02(C)*0.604=86.04
+
+
+    'HMP60 Temp & RH
+    VoltSe(AirT,1,mV1000,12,0,0,_60Hz,0.1,-40.0)
+    VoltSe(RH,1,mV1000,13,0,0,_60Hz,0.1,0)
+
+    'LWS Leaf Wetness Sensor measurement LW_kOhm:
+    BrHalf(Wetness1,1,mv5000,14,Vx1,1,2500,False,10000,250,2500,0)
+    If Wetness1 > 350 Then
+      '************************************************
+      Wet_Day1 = Wet_Day1 + 0.0167   ''because scan is 1 sec interval and unit is minute  1/60 = 0.016667
+      '************************************************
+    EndIf
+
+    'LWS Leaf Wetness Sensor measurement LW_kOhm:
+    BrHalf(Wetness2,1,mv5000,15,Vx1,1,2500,False,10000,250,2500,0)
+    If Wetness2 > 350 Then
+      '************************************************
+      Wet_Day2 = Wet_Day2 + 0.0167   ''because scan is 1 sec interval and unit is minute  1/60 = 0.016667
+      '************************************************
+    EndIf
+
+    'LWS Leaf Wetness Sensor measurement LW_kOhm:
+    BrHalf(Wetness3,1,mv5000,16,Vx1,1,2500,False,10000,250,2500,0)
+    If Wetness3 > 350 Then
+      '************************************************
+      Wet_Day3 = Wet_Day3 + 0.0167   ''because scan is 1 sec interval and unit is minute  1/60 = 0.016667
+      '************************************************
+    EndIf
+
+    'LWS Leaf Wetness Sensor measurement LW_kOhm:
+    BrHalf(Wetness4,1,mv5000,17,Vx1,1,2500,False,10000,250,2500,0)
+    If Wetness4 > 350 Then
+      '************************************************
+      Wet_Day4 = Wet_Day4 + 0.0167   ''because scan is 1 sec interval and unit is minute  1/60 = 0.016667
+      '************************************************
+    EndIf
+
+
+    '    'additional two CS616 Water Content Reflectometer measurements
+    CS616(period_1,1,18,4,1,1.0,0)
+    CS616(period_2,1,19,5,1,1.0,0)
+    CS616(period_3,1,20,4,1,1.0,0)
+    CS616(period_4,1,21,5,1,1.0,0)
+    CS616(period_5,1,22,4,1,1.0,0)
+    CS616(period_6,1,23,5,1,1.0,0)
+
+    soilwtr_1 =-0.0663+(-0.0063*period_1)+(0.0007*period_1^2)
+    soilwtr_2 =-0.0663+(-0.0063*period_2)+(0.0007*period_2^2)
+    soilwtr_3 =-0.0663+(-0.0063*period_3)+(0.0007*period_3^2)
+    soilwtr_4 =-0.0663+(-0.0063*period_4)+(0.0007*period_4^2)
+    soilwtr_5 =-0.0663+(-0.0063*period_5)+(0.0007*period_5^2)
+    soilwtr_6 =-0.0663+(-0.0063*period_6)+(0.0007*period_6^2)
+
+
+    'TCAV soil Temp
+    TCSe (soiltemp_1,1,mV20C,24,TypeE,panel_temp,True,0,_60Hz,1.0,0)
+    TCSe (soiltemp_2,1,mV20C,25,TypeE,panel_temp,True,0,_60Hz,1.0,0)
+
+
+    If (IfTime(0,1440,min)) Then
+      Wet_Day1=0
+      Wet_Day2=0
+      Wet_Day3=0
+      Wet_Day4=0
+    EndIf
+
+  NextScan
+	
+EndProg

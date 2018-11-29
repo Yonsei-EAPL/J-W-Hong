@@ -1,0 +1,1794 @@
+'CR3000 Series Datalogger
+
+'Copyright (c) 2002, 2006, 2010 Campbell Scientific, Inc. All rights reserved.
+
+'19 Oct 11
+'version 1.1
+
+
+'The following sensors are measured:
+'
+'EC155      closed path infrared gas analyzer (CO2 and H2O)
+'CSAT3A     three dimensional sonic anemometer
+
+Const SENSOR_CSAT3 = FALSE  'Set to TRUE if CSAT3 three dimensional sonic anemometer is used
+                            'Set to FALSE is CSAT3A sonic head is used on EC100 electronics
+
+
+' The sign convention for the fluxes is positive away from the surface and
+'negative towards the surface.
+'
+' Before computing online fluxes, the datalogger will introduce lags into the
+'eddy covariance data to account for the gas analyzer tube delay. The raw data
+'is not lagged.
+'
+' The site attendant must load in several constants and calibration values.
+'Search for the text string "unique" to find the locations where unique
+'constants and calibration values are entered.
+
+
+'*** Unit Definitions ***
+
+'Symbol   Units
+'C        Celsius
+'degrees  degrees (angle)
+'g        grams
+'J        Joules
+'kg       kilograms
+'kPa      kilopascals
+'m        meters
+'mg       milligrams
+'mmol     millimoles
+'mol      moles
+'s        seconds
+'umol     micromols
+'V        volts
+'W        Watts
+
+
+'*** Wiring ***
+
+'ANALOG INPUT
+'1H         Pump module pressure (blue)
+'1L         Pump module thermistor signal (green)
+'gnd        Pump module thermistor reference (yellow)
+
+'2H         Scrub module pressure (black)
+'2L         Scrub module thermistor signal (white)
+'gnd        Scrub module thermistor reference (gray)
+
+'3H         Valve module thermistor (green)
+'3L         Leaf wetness sensor signal (red)
+'gnd        Valve module thermistor reference (yellow)
+'           Leaf wetness sensor signal reference (bare)
+
+
+'VOLTAGE EXCITATION
+'Vx1        Leaf wetness sensor excitation (white)
+
+
+'CONTROL PORTS
+'C1         Sample pump tachometer (red)
+'G          Zero/span needle valve control reference (black)
+'C5         Zero/span needle valve control (white)
+'C7         Sample pump power control (brown)
+
+
+'SDM INPUT
+'SDM-C1     EC155 w/CSAT3A SDM Data (green)
+'           SDM-CD16S Data (green)
+'SDM-C2     EC155 w/CSAT3A SDM Clock (white)
+'           SDM-CD16S Clock (white)
+'SDM-C3     EC155 w/CSAT3A SDM Enable (brown)
+'           SDM-CD16S Enable (brown)
+'G          EC155 w/CSAT3A SDM reference (black)
+'           EC155 w/CSAT3A SDM shield (clear)
+
+
+'POWER IN
+'12V        datalogger (red)
+'G          datalogger (black)
+
+
+'POWER OUT
+'12V        SDM-CD816S power (red)
+'5V         Pump module thermistor excitation (orange)
+'           Valve module thermistor excitation (blue)
+'G          SDM-CD16S power reference (black)
+
+
+'EXTERNAL POWER SUPPLY
+'POS        CSAT3A/EC155 power (red)
+'           datalogger (red)
+'NEG        CSAT3A/EC155 power reference (black)
+'           CSAT3A/EC155 power shield (clear)
+'           datalogger (black)
+
+
+'EC100 (SDM address 1)
+
+
+'SDM-CD16S (SDM address 2)
+'LOGIC PWR  P/N 72364 Solid State Relay Driver 24V (red)
+'LOGIC GND  P/N 72364 Solid State Relay Driver G (black)
+'C1         SDM-C1 data (green)
+'C2         SDM-C2 clock (white)
+'C3         SDM-C3 enable (brown
+
+'G
+'OUT 1      Zero (site 3) valve control (brown)
+
+'G          All valve control reference (black)
+'OUT 2      CO2 #1 span (site 4) valve control (red)
+
+'G
+'OUT 3      CO2 #2 span (site 5) valve control (yellow)
+
+'G
+'OUT 4      CO2 #3 span (site 6) valve control (green)
+
+'G
+'OUT 5      CO2 #4 span (site 7) valve control (blue)
+
+'G          Valve control cable shield (clear)
+'OUT 6      H2O span (site 8) valve control (gray)
+
+'G          Valve module heater/fan power reference (black)
+'OUT 7      Valve module heater power (red)
+
+'G          Valve module heater/fan shield (clear)
+'OUT 8      Valve module fan power (white)
+
+'G          Pump module fan power reference (orange)
+'OUT 9      Pump module heater power (red)
+
+'G          Pump module fan power reference (black)
+'OUT 10     Pump module fan power (brown)
+
+'G          Scrub module pump/heater/fan power return (color)
+'OUT 11     Scrub module pump power (color)
+
+'G
+'OUT 12     Scrub module heater power (color)
+
+'G
+'OUT 13     Scrub module fan power (color)
+
+'G
+'OUT 14
+
+'G
+'OUT 15
+
+'G
+'OUT 16
+
+
+'P/N 72364 SOLID STATE RELAY DRIVER
+'G
+'C1
+'24 V
+'G
+'G
+'24 V
+'G IN       G power reference (black)
+'24 V IN    +12V power (red)
+'OUT1-      Zero or span needle valve power reference (black)
+'OUT1+      Zero or span needle valve power (red)
+
+
+PipeLineMode
+
+
+'*** System timing constants ***
+'Automatic zero and span site timing (seconds).
+Const SECONDS_ON_SITE_1  = 14200 'Atmosphere with sample pump (unique value).
+Const SECONDS_ON_SITE_2  = 10    'Atmosphere without sample pump (unique value).
+Const SECONDS_ON_SITE_3a = 60    'Zero, first visit (unique value).
+Const SECONDS_ON_SITE_3b = 10    'Zero, second visit (unique value).
+Const SECONDS_ON_SITE_4a = 60    'CO2 #1 span, first visit (unique value).
+Const SECONDS_ON_SITE_4b = 60    'CO2 #1 span, second visit (unique value).
+Const SECONDS_ON_SITE_5  = 0     'CO2 #2 span (unique value).
+Const SECONDS_ON_SITE_6  = 0     'CO2 #3 span (unique value).
+Const SECONDS_ON_SITE_7  = 0     'CO2 #4 span (unique value).
+Const SECONDS_ON_SITE_8  = 0     'H2O span.
+
+Const CYCLE_TIME = SECONDS_ON_SITE_1+SECONDS_ON_SITE_2+SECONDS_ON_SITE_4a+SECONDS_ON_SITE_3a+SECONDS_ON_SITE_3b+SECONDS_ON_SITE_4b+SECONDS_ON_SITE_5+SECONDS_ON_SITE_6+SECONDS_ON_SITE_7+SECONDS_ON_SITE_8 'Time to visit all the sites in seconds.
+
+'Configure valve settings.
+Const SITE_1 = &b00000000000 'Atmosphere with sample pump.
+Const SITE_2 = &b00000000000 'Atmosphere without sample pump.
+Const SITE_3 = &b10000000001 'Zero.
+Const SITE_4 = &b00000000010 'CO2 #1 span.
+Const SITE_5 = &b00000000100 'CO2 #2 span.
+Const SITE_6 = &b00000001000 'CO2 #3 span.
+Const SITE_7 = &b00000010000 'CO2 #4 span.
+Const SITE_8 = &b00000100000 'H2O span.
+
+
+'*** General constants and variables ***
+Const SCAN_INTERVAL = 100  'Measurement Rate 100 ms (10 Hz).
+Const OUTPUT_INTERVAL = 30 'Unique value, online flux data output interval in minutes.
+Const SDM_PER = 30         'Unique value, default SDM clock speed.
+
+Const OFFSET = 11                                                 'An offset delay that will be introduced to the eddy covariance data used to compute online fluxes.
+Const SCAN_BUFFER_SIZE = 60*INT (1000/SCAN_INTERVAL)              'Compute a 60 second scan buffer.
+Const NUM_DAY_CPU = 7                                             'Number of days of data to store on the CPU.
+Const FLUX_SIZE_CPU = Ceiling (NUM_DAY_CPU*1440)/OUTPUT_INTERVAL  'Size of flux data table on CPU [days].
+Const ONLINCAL_SZE_CPU = Ceiling ((NUM_DAY_CPU*86400)/CYCLE_TIME) 'Size of online field zero and span data table on CPU [days].
+
+Const R = 8.3143e-3                                               'Universal gas constant [kPa m^3/(K mol)].
+Const RD = R/29                                                   'Gas constant for dry air [kPa m^3/(K g)].
+Const LV = 2440                                                   'Estimate of the latent heat of vaporization [J/g].
+Const RV = R/18                                                   'Gas constant for water vapor [kPa m^3/(K g)].
+
+Dim dly_data_out(9)                                               'Array used to temporarily store the lagged record.
+
+'Other measurements.
+Public panel_tmpr
+Public batt_volt
+Units panel_tmpr = C
+Units batt_volt = V
+
+'Program working variables.
+Dim scan_count As Long                                   'Number scans executed.
+Dim slowsequence_finished_f As Boolean                   'Flag used to indicate the SlowSequence has finished its scan.
+Dim slowsequence_disable_f As Boolean = TRUE             'Flag used to decimate statistics in main scan.
+Dim sys_conf_var_file As Long                            'Filehandle for the configuration data stored in the CPU.
+Dim sys_conf_var(8) = {0,0,10,1,7,1,0,1}                 'Variables saved are:  sonic_azimuth, CO2_span_gas, Td_span_gas, tube_dly, pump_flow_set_pt, valve_flow_set_pt, scrub_flow_set_pt, and mode.
+Dim call_onlincal_f As Boolean                           'Set TRUE to save new field calibration data to the data table onlincal.
+Dim buff_depth
+Dim i As Long
+Dim n = 1
+Units n = samples
+
+
+'*** Beginning of EC100 configure, zero, and span constants and variables, and subroutine ***
+Const EC100_SDM_ADDR = 1        'Unique SDM address for EC100.
+Const BANDWIDTH = 20            '20 = 20 Hz
+Const DIFFERENTIAL_PRESSURE = 1 '1 = enabled
+Const TEMPERATURE_SOURCE = 2    '2 = sample cell temperature sensor
+Const BB = 0                    'BB = EC100 basic pressure transducer
+Const EB = 2                    'EB = EC100 enhanced pressure transducer
+
+Dim config_array(3,2) = {0,BANDWIDTH,3,DIFFERENTIAL_PRESSURE,7,TEMPERATURE_SOURCE}
+Dim power_array (1,2) = {21,0}
+Dim press_source_array(1,2) = {2,0}   'Pressure source,basic pressure transducer (default).
+Dim zero_array(1,2) = {11,1}          'Zero/Span command,set zero value.
+Dim span_CO2_array(2,2) = {12,0,11,2} 'CO2 span concentration,0; Zero/Span command,set CO2 span value (default).
+Dim span_H2O_array(2,2) = {13,0,11,3} 'H2O span dew point temperature,0; Zero/Span command,set H2O span value (default).
+Dim config_result As Long
+
+Public set_press_source_f As Boolean
+Public do_zero_f As Boolean
+Public do_CO2_span_f As Boolean
+Public do_H2O_span_f As Boolean
+Dim configure_ec100_f As Boolean = TRUE
+Dim ec155_power_f As Boolean
+Dim NAN_cnt As Long
+Dim retry_config_f As Boolean
+
+
+Sub Config (cmd_array(4,2),num_cmd As Long,retry_config_f As Boolean)
+  Dim i As Long
+  Dim config_result As Long
+  Dim save_flash_f As Boolean = FALSE
+
+  For i = 1 To num_cmd
+    EC100Configure (config_result,EC100_SDM_ADDR,cmd_array(i,1),cmd_array(i,2))
+    If ( config_result = NAN ) Then ( ExitFor )
+    If ( (cmd_array(i,1) = 2) OR (cmd_array(i,1) = 11) ) Then ( save_flash_f = TRUE )
+  Next i
+
+  If ( i = num_cmd+1 ) Then
+    If ( save_flash_f ) Then ( EC100Configure (config_result,EC100_SDM_ADDR,99,2718) )
+    If ( config_result <> NAN ) Then ( retry_config_f = FALSE )
+  EndIf
+
+  SetStatus ("SkippedScan",0)
+EndSub
+'*** End of EC100 configure, zero, and span constants and variables, and subroutine ***
+
+
+'*** Beginning of CSAT3A sonic head constants, variables, and working data table ***
+Const CP = 1004.67                         'Estimate of heat capacity of air [J/(kg K)].
+
+Public sonic(5)
+Alias sonic(1) = Ux
+Alias sonic(2) = Uy
+Alias sonic(3) = Uz
+Alias sonic(4) = Ts
+Alias sonic(5) = diag_sonic
+
+Public diag_bits_sonic(6) As Boolean        'Sonic warning flags.
+Public sonic_azimuth                        'Enter sonic azimuth using keyboard after program has compiled (azimuth of the CSAT3(A) negative x-axis see Section 3.2.1 CSAT3A Azimuth in the OPEC manual).
+Alias diag_bits_sonic(1) = amp_l_f          'Amplitude low warning flag.
+Alias diag_bits_sonic(2) = amp_h_f          'Amplitude high warning flag.
+Alias diag_bits_sonic(3) = sig_lck_f        'Poor signal lock warning flag.
+Alias diag_bits_sonic(4) = del_T_f          'Delta temperature warning flag.
+Alias diag_bits_sonic(5) = aq_sig_f         'Sonic acquiring signals warning flag.
+Alias diag_bits_sonic(6) = sonic_cal_err_f  'Signature error in reading CSAT3A sonic head calibration data.
+Units diag_bits_sonic = arb
+Units sonic_azimuth = degrees
+
+Dim sonic_irga_raw(13)                      'EC155 w/CSAT3A sonic head  (not lagged).
+
+Dim diag_sonic_tmp As Long                  'Temporary variable used to break out the CSAT3A sonic head diagnostic bits.
+Dim sonic_disable_f As Boolean              'TRUE when CSAT3A sonic head diagnostic warning flags are on or CSAT3A sonic head has not sent data or an SDM signature error is reported.
+Dim Ts_absolute                             'Sonic temperature (K).
+Dim sonic_azimuth_prev
+
+Dim cov_array_sonic(1,4)                    'Arrays used to hold the input data for the covariance instructions (CSAT3A sonic head).
+Dim cov_out_sonic(18)                       'CSAT3A sonic head statistics.
+Alias cov_out_sonic(1) = Hs                 'Sensible heat flux using sonic temperature.
+Alias cov_out_sonic(2) = tau                'Momentum flux.
+Alias cov_out_sonic(3) = u_star             'Friction velocity.
+Alias cov_out_sonic(4) = Ts_stdev
+Alias cov_out_sonic(5) = Ts_Ux_cov
+Alias cov_out_sonic(6) = Ts_Uy_cov
+Alias cov_out_sonic(7) = Ts_Uz_cov
+Alias cov_out_sonic(8) = Ux_stdev
+Alias cov_out_sonic(9) = Ux_Uy_cov
+Alias cov_out_sonic(10) = Ux_Uz_cov
+Alias cov_out_sonic(11) = Uy_stdev
+Alias cov_out_sonic(12) = Uy_Uz_cov
+Alias cov_out_sonic(13) = Uz_stdev
+Alias cov_out_sonic(14) = wnd_spd
+Alias cov_out_sonic(15) = rslt_wnd_spd
+Alias cov_out_sonic(16) = wnd_dir_sonic
+Alias cov_out_sonic(17) = std_wnd_dir
+Alias cov_out_sonic(18) = wnd_dir_compass
+Units Hs = W/m^2
+Units tau = kg/(m s^2)
+Units u_star = m/s
+Units Ts_stdev = C
+Units Ts_Ux_cov = C m/s
+Units Ts_Uy_cov = C m/s
+Units Ts_Uz_cov = C m/s
+Units Ux_stdev = m/s
+Units Ux_Uy_cov = (m/s)^2
+Units Ux_Uz_cov = (m/s)^2
+Units Uy_stdev = m/s
+Units Uy_Uz_cov = (m/s)^2
+Units Uz_stdev = m/s
+Units wnd_spd = m/s
+Units rslt_wnd_spd = m/s
+Units wnd_dir_sonic = degrees
+Units std_wnd_dir = degrees
+Units wnd_dir_compass = degrees
+
+DataTable (delay_3d,TRUE,OFFSET)
+  TableHide
+
+  Sample (5,sonic_irga_raw(1),IEEE4)
+EndTable
+
+DataTable (comp_cov_3d,TRUE,1)
+  TableHide
+  DataInterval (0,OUTPUT_INTERVAL,Min,1)
+
+  'Compute covariances from CSAT3A data.
+  Covariance (4,cov_array_sonic(1,1),IEEE4,sonic_disable_f,10)
+  WindVector (1,Uy,Ux,IEEE4,sonic_disable_f,0,1,2)
+EndTable
+'*** End of CSAT3A constants, variables, and working data table ***
+
+
+'*** Beginning of EC155 constants, variables, and working data table ***
+Const DELAY_EC155 = INT (4000/SCAN_INTERVAL/BANDWIDTH) 'Automatically computed lag of the EC155 data.
+Const EC155_REC_BCK = OFFSET-DELAY_EC155 'Number of records back to align EC155 data.
+Const EC155_PWR_DN_TMPR = -30
+Const EC155_PWR_UP_TMPR = -25
+
+Public irga(12)
+Alias irga(1) = CO2
+Alias irga(2) = H2O
+Alias irga(3) = diag_irga
+Alias irga(4) = cell_tmpr
+Alias irga(5) = cell_press
+Alias irga(6) = CO2_sig_strgth
+Alias irga(7) = H2O_sig_strgth
+Alias irga(8) = diff_press
+Alias irga(9) = calib_type
+Alias irga(10) = amb_press
+Alias irga(11) = Tc
+Alias irga(12) = Td
+Units Td = C
+
+Public diag_bits_irga(21) As Boolean        'Gas analyzer warning flags.
+Alias diag_bits_irga(1) = irga_bad_data_f   'EC155 bad data warning flag.
+Alias diag_bits_irga(2) = gen_sys_fault_f   'General system fault warning flag.
+Alias diag_bits_irga(3) = sys_startup_f     'EC155 starting up warning flag.
+Alias diag_bits_irga(4) = motor_spd_f       'EC155 motor speed out of bounds warning flag.
+Alias diag_bits_irga(5) = tec_tmpr_f        'Thermoelectric cooler temperature out of bounds warning flag.
+Alias diag_bits_irga(6) = src_pwr_f         'EC155 source power out of bounds warning flag.
+Alias diag_bits_irga(7) = src_tmpr_f        'EC155 source temperature out of bounds warning flag.
+Alias diag_bits_irga(8) = src_curr_f        'EC155 source current out of bounds warning flag.
+Alias diag_bits_irga(9) = irga_off_f        'Gas analyzer head is powered down.
+Alias diag_bits_irga(10) = irga_sync_f      'EC155 not synchronized with home pulse warning flag.
+Alias diag_bits_irga(11) = cell_tmpr_f      'Invalid cell temperature warning flag.
+Alias diag_bits_irga(12) = cell_press_f     'Invalid cell pressure warning flag.
+Alias diag_bits_irga(13) = CO2_I_f          'CO2 I out of bounds warning flag.
+Alias diag_bits_irga(14) = CO2_Io_f         'CO2 Io out of bounds warning flag.
+Alias diag_bits_irga(15) = H2O_I_f          'H2O I out of bounds warning flag.
+Alias diag_bits_irga(16) = H2O_Io_f         'H2O Io out of bounds warning flag.
+Alias diag_bits_irga(17) = CO2_Io_var_f     'CO2 Io moving variation out of bounds warning flag.
+Alias diag_bits_irga(18) = H2O_Io_var_f     'H2O Io moving variation out of bounds warning flag.
+Alias diag_bits_irga(19) = CO2_sig_strgth_f 'CO2 signal strength warning flag.
+Alias diag_bits_irga(20) = H2O_sig_strgth_f 'H2O signal strength warning flag.
+Alias diag_bits_irga(21) = irga_cal_err_f   'EC155 calibration data signature error.
+Units diag_bits_irga = arb
+
+Dim sys_status_f(3) As Long
+Alias sys_status_f(1) = calib_type_raw      'Used to identify mode and omit status. Bits 0 through 3 are sites 1 through 8, and bit 4 is the omit flag. For computing fluxes, filter all values not equal to 1.
+Alias sys_status_f(2) = calib_type_CO2      'Type of calibration, lagged by closed path CO2 tube delay.
+Alias sys_status_f(3) = calib_type_H2O      'Type of calibration, lagged by closed path H2O tube delay.
+Units sys_status_f = arb
+
+Dim diag_irga_tmp As Long                   'Temporary variable used to break out the EC155 diagnostic bits.
+Dim irga_disable_f As Boolean               'TRUE when EC155 or CSAT3A sends bad data.
+Dim rho_d_mean                              'Density of dry air.
+Dim rho_v_mean                              'Water vapor density.
+Dim mask As Long
+Dim Td_tmp
+Dim factor_CO2                              'Used to convert CS155 online flux data from molar mixing ratio to mass density [g mol/(mmol m^3)].
+Dim factor_H2O                              'Used to convert CS155 online flux data from molar mixing ratio to mass density [g mol/(mmol m^3)].
+Units factor_CO2 = (g mol)/(m               '(g mol)/(m^3 mmol)
+Units factor_H2O = (g mol)/(m               '(g mol)/(m^3 mmol)
+
+Dim cov_array_cs(3,4)                       'Arrays used to hold the input data for the covariance instructions (CSAT3A and EC155).
+Dim cov_out_cs(22)                          'EC155 statistics.
+Alias cov_out_cs(1) = Fc                    'Carbon dioxide flux (EC155).
+Alias cov_out_cs(2) = LE                    'Latent heat flux (EC155).
+Alias cov_out_cs(3) = Hc                    'Sensible heat flux using sonic temperature corrected for water vapor measured by the EC155.
+Alias cov_out_cs(4) = CO2_stdev
+Alias cov_out_cs(5) = CO2_Ux_cov
+Alias cov_out_cs(6) = CO2_Uy_cov
+Alias cov_out_cs(7) = CO2_Uz_cov
+Alias cov_out_cs(8) = H2O_stdev
+Alias cov_out_cs(9) = H2O_Ux_cov
+Alias cov_out_cs(10) = H2O_Uy_cov
+Alias cov_out_cs(11) = H2O_Uz_cov
+Alias cov_out_cs(12) = Tc_stdev
+Alias cov_out_cs(13) = Tc_Ux_cov
+Alias cov_out_cs(14) = Tc_Uy_cov
+Alias cov_out_cs(15) = Tc_Uz_cov
+Alias cov_out_cs(16) = CO2_mean
+Alias cov_out_cs(17) = H2O_mean
+Alias cov_out_cs(18) = cell_tmpr_mean
+Alias cov_out_cs(19) = cell_press_mean
+Alias cov_out_cs(20) = amb_press_mean
+Alias cov_out_cs(21) = Tc_mean              'Sonic temperature corrected for humidity.
+Alias cov_out_cs(22) = rho_a_mean
+Units Fc = mg/(m^2 s)
+Units LE = W/m^2
+Units Hc = W/m^2
+Units CO2_stdev = mg/m^3
+Units CO2_Ux_cov = mg/(m^2 s)
+Units CO2_Uy_cov = mg/(m^2 s)
+Units CO2_Uz_cov = mg/(m^2 s)
+Units H2O_stdev = g/m^3
+Units H2O_Ux_cov = g/(m^2 s)
+Units H2O_Uy_cov = g/(m^2 s)
+Units H2O_Uz_cov = g/(m^2 s)
+Units Tc_stdev = C
+Units Tc_Ux_cov = C m/s
+Units Tc_Uy_cov = C m/s
+Units Tc_Uz_cov = C m/s
+Units CO2_mean = mg/m^3
+Units H2O_mean = g/m^3
+Units cell_tmpr_mean = C
+Units cell_press_mean = kPa
+Units amb_press_mean = kPa
+Units Tc_mean = C
+Units rho_a_mean = kg/m^3
+
+Dim cp_rec_bck = 1 'Number of records back to align the EC155 CO2 and H2O data used in online fluxes.
+
+DataTable (delay_cs,TRUE,OFFSET)
+  TableHide
+
+  Sample (8,sonic_irga_raw(6),IEEE4)
+  Sample (1,calib_type_raw,IEEE4)
+EndTable
+
+DataTable (comp_cov_cs,TRUE,1)
+  TableHide
+  DataInterval (0,OUTPUT_INTERVAL,Min,1)
+
+  'Compute covariance of CO2 against sonic wind data.
+  Covariance (4,cov_array_cs(1,1),IEEE4,irga_disable_f OR (calib_type_CO2<>1),4)
+  'Compute covariance of H2O against sonic wind data.
+  Covariance (4,cov_array_cs(2,1),IEEE4,irga_disable_f OR (calib_type_H2O<>1),4)
+  'Compute covariance of Tc (computed fast response temperature) against CSAT3A wind data.
+  Covariance (4,cov_array_cs(3,1),IEEE4,irga_disable_f OR (calib_type_CO2<>1) OR (calib_type_H2O<>1),4)
+  Average (1,CO2,IEEE4,irga_bad_data_f OR (calib_type_CO2<>1))
+  Average (1,H2O,IEEE4,irga_bad_data_f OR (calib_type_H2O<>1))
+  Average (2,cell_tmpr,IEEE4,irga_bad_data_f OR (calib_type_CO2<>1) OR (calib_type_H2O<>1))
+  Average (1,amb_press,IEEE4,irga_bad_data_f OR (calib_type_CO2<>1) OR (calib_type_H2O<>1))
+  Average (1,Tc,IEEE4,irga_disable_f OR (calib_type_CO2<>1) OR (calib_type_H2O<>1))
+EndTable
+'*** End of EC155 constants, variables, and working data table ***
+
+
+'*** Beginning of sample pump module constants and variables ***
+Const PUMP_PWR_TMPR_SET_PT_LOW = 0
+Const PUMP_PWR_TMPR_SET_PT_HIGH = 55
+Const PUMP_PWR_TMPR_DEAD_BAND_WIDTH = 2
+Const PUMP_TMPR_CTRL_SET_PT_LOW = 2
+Const PUMP_TMPR_CTRL_SET_PT_HIGH = 50
+Const PUMP_TMPR_CTRL_DEAD_BAND_WIDTH = 5
+
+Public pump_tmpr
+Public pump_press
+Public pump_flow
+Public pump_flow_set_pt = 7
+Public pump_flow_duty_cycle
+Public pump_heater_f As Boolean
+Public pump_fan_f As Boolean
+Units pump_tmpr = C
+Units pump_press = kPa
+Units pump_flow = l/min
+Units pump_flow_set_pt = l/min
+Units pump_flow_duty_cycle = %
+Dim pump_spd
+Dim pump_flow_set_pt_prev
+Dim pump_flow_P_fact = 0.015
+Dim pump_flow_I_fact = 0.02
+Dim pump_flow_D_fact = 0
+Dim pump_flow_P
+Dim pump_flow_D
+Dim pump_flow_D2
+Dim pump_flow_prev
+Dim pump_flow_D_prev
+Dim pump_flow_ctrl_sign = -1
+Dim pump_min_flow_duty_cycle = 0
+Dim pump_off_f As Boolean
+Dim pump_heater As Long
+Dim pump_fan As Long
+Dim pump_off As Boolean
+Units pump_heater = arb
+Units pump_fan = arb
+Units pump_off = arb
+'*** End of sample pump module constants and variables ***
+
+
+'*** Beginning of valve module constants, variables, and working data table ***
+'Automatic/manual zero and span omit timing (seconds).
+Const BLOCK_MEAN_LENGTH_SECONDS = 5  'Block mean length in seconds. Used to find mean of zero, CO2 span, and H2O span during a zero and span.
+Const OMIT_SECONDS_SITE_1 = BLOCK_MEAN_LENGTH_SECONDS                    'Atmosphere with sample pump (unique value).
+Const OMIT_SECONDS_SITE_2 = SECONDS_ON_SITE_2                            'Atmosphere without sample pump (unique value).
+Const OMIT_SECONDS_SITE_3 = SECONDS_ON_SITE_3a-BLOCK_MEAN_LENGTH_SECONDS 'Zero (unique value).
+Const OMIT_SECONDS_SITE_4 = SECONDS_ON_SITE_4a-BLOCK_MEAN_LENGTH_SECONDS 'CO2 #1 span (unique value).
+Const OMIT_SECONDS_SITE_5 = SECONDS_ON_SITE_5-BLOCK_MEAN_LENGTH_SECONDS  'CO2 #2 span (unique value).
+Const OMIT_SECONDS_SITE_6 = SECONDS_ON_SITE_6-BLOCK_MEAN_LENGTH_SECONDS  'CO2 #3 span (unique value).
+Const OMIT_SECONDS_SITE_7 = SECONDS_ON_SITE_7-BLOCK_MEAN_LENGTH_SECONDS  'CO2 #4 span (unique value).
+Const OMIT_SECONDS_SITE_8 = SECONDS_ON_SITE_8-BLOCK_MEAN_LENGTH_SECONDS  'H2O span (unique value).
+Const SCAN_INTERVAL_SECONDS = SCAN_INTERVAL/1000
+Const BLOCK_MEAN_LENGTH = BLOCK_MEAN_LENGTH_SECONDS/SCAN_INTERVAL_SECONDS 'Block mean length in scans. Used to find mean of zero, CO2 span, and H2O span during a zero and span.
+
+'Custom menu constants and site numbers.
+Const EC_on_auto_zro_spn = 1
+Const Sample_pump_off = 2
+Const Zero_all = 3
+Const Span_CO2_1 = 4
+Const Span_CO2_2 = 5
+Const Span_CO2_3 = 6
+Const Span_CO2_4 = 7
+Const Span_H2O = 8
+Const EC_off_auto_zro_spn = 9
+
+'System and SDM-CD8S control variables.
+Const MAXIMUM_SITES_IN_SEQUENCE = 10
+Public mode As Long
+Public site As Long = 1
+Public sec_on_site
+Public span_gas(3)
+Alias span_gas(1) = CO2_span_gas                   'Carbon dioxide calibration gas.
+Alias span_gas(2) = Td_span_gas                    'Dew point temperature from the dew point generator.
+Alias span_gas(3) = H2O_span_gas                   'Water vapor calibration gas.
+Units CO2_span_gas = umol/mol
+Units Td_span_gas = C
+Units H2O_span_gas = mmol/mol
+
+Dim site_sequence(MAXIMUM_SITES_IN_SEQUENCE) As Long = {2,4,3,3,4,5,6,7,8,1}
+Dim set_valve(MAXIMUM_SITES_IN_SEQUENCE,2) As Long 'SDM-CD16S timing and valve control.
+Dim system_tmpr_ctrl As Long 'SDM-CD16S temperature relay control.
+Dim index As Long
+
+Dim zero_span_values(41)
+Alias zero_span_values(1) = CO2_gain               'Carbon dioxide gain [CO2_span_gas/(CO2_span-CO2_zero)].
+Alias zero_span_values(2) = H2O_gain               'Water vapor gain [H2O_span_gas/(H2O_span-H2O_zero)].
+Alias zero_span_values(3) = CO2_zero               'Carbon dioxide mixing ratio during zero (offset).
+Alias zero_span_values(4) = H2O_zero               'Water vapor mixing ratio during zero (offset).
+Alias zero_span_values(5) = zero_tmpr              'Cell temperature during zero.
+Alias zero_span_values(6) = zero_press             'Cell pressure during zero.
+Alias zero_span_values(7) = zero_CO2_sig_strgth    'CO2 signal strength during zero.
+Alias zero_span_values(8) = zero_H2O_sig_strgth    'H2O signal strength during zero.
+Alias zero_span_values(9) = zero_diff_press        'Pressure drop across the filter during zero.
+Alias zero_span_values(10) = zero_valve_flow       'Flow during zero.
+Alias zero_span_values(11) = CO2_1_span            'Carbon dioxide mixing ratio during carbon dioxide #1 span.
+Alias zero_span_values(12) = CO2_1_span_tmpr       'Cell temperature during carbon dioxide #1 span.
+Alias zero_span_values(13) = CO2_1_span_press      'Cell pressure during carbon dioxide #1 span.
+Alias zero_span_values(14) = CO2_1_CO2_sig_strgth  'CO2 signal strength during carbon dioxide #1 span.
+Alias zero_span_values(15) = CO2_1_diff_press      'Pressure drop across the filter during carbon dioxide #1 span.
+Alias zero_span_values(16) = CO2_1_span_valve_flow 'Flow during carbon dioxide #1 span.
+Alias zero_span_values(17) = CO2_2_span            'Carbon dioxide mixing ratio during carbon dioxide #2 span.
+Alias zero_span_values(18) = CO2_2_span_tmpr       'Cell temperature during carbon dioxide #2 span.
+Alias zero_span_values(19) = CO2_2_span_press      'Cell pressure during carbon dioxide #2 span.
+Alias zero_span_values(20) = CO2_2_CO2_sig_strgth  'CO2 signal strength during carbon dioxide #2 span.
+Alias zero_span_values(21) = CO2_2_diff_press      'Pressure drop across the filter during carbon dioxide #2 span.
+Alias zero_span_values(22) = CO2_2_span_valve_flow 'Flow during carbon dioxide #2 span.
+Alias zero_span_values(23) = CO2_3_span            'Carbon dioxide mixing ratio during carbon dioxide #3 span.
+Alias zero_span_values(24) = CO2_3_span_tmpr       'Cell temperature during carbon dioxide #3 span.
+Alias zero_span_values(25) = CO2_3_span_press      'Cell pressure during carbon dioxide #3 span.
+Alias zero_span_values(26) = CO2_3_CO2_sig_strgth  'CO2 signal strength during carbon dioxide #3 span.
+Alias zero_span_values(27) = CO2_3_diff_press      'Pressure drop across the filter during carbon dioxide #3 span.
+Alias zero_span_values(28) = CO2_3_span_valve_flow 'Flow during carbon dioxide #3 span.
+Alias zero_span_values(29) = CO2_4_span            'Carbon dioxide mixing ratio during carbon dioxide #4 span.
+Alias zero_span_values(30) = CO2_4_span_tmpr       'Cell temperature during carbon dioxide #4 span.
+Alias zero_span_values(31) = CO2_4_span_press      'Cell pressure during carbon dioxide #4 span.
+Alias zero_span_values(32) = CO2_4_CO2_sig_strgth  'CO2 signal strength during carbon dioxide #4 span.
+Alias zero_span_values(33) = CO2_4_diff_press      'Pressure drop across the filter during carbon dioxide #4 span.
+Alias zero_span_values(34) = CO2_4_span_valve_flow 'Flow during carbon dioxide #4 span.
+Alias zero_span_values(35) = Td_span               'Dew point temperature during water vapor span.
+Alias zero_span_values(36) = H2O_span              'Water vapor mixing ratio during water vapor span.
+Alias zero_span_values(37) = H2O_span_tmpr         'Cell temperature during a water vapor span zero and span.
+Alias zero_span_values(38) = H2O_span_press        'Pressure during a water vapor span.
+Alias zero_span_values(39) = H2O_H2O_sig_strgth    'H2O signal strength during a water vapor span.
+Alias zero_span_values(40) = H2O_diff_press        'Pressure drop across the filter during water vapor span.
+Alias zero_span_values(41) = H2O_span_valve_flow   'Flow during a water vapor span.
+Units CO2_gain = arb
+Units H2O_gain = arb
+Units CO2_zero = umol/mol
+Units H2O_zero = mmol/mol
+Units zero_tmpr = C
+Units zero_press = kPa
+Units zero_CO2_sig_strgth = arb
+Units zero_H2O_sig_strgth = arb
+Units zero_diff_press = kPa
+Units zero_valve_flow = l/min
+Units CO2_1_span = umol/mol
+Units CO2_1_span_tmpr = C
+Units CO2_1_span_press = kPa
+Units CO2_1_CO2_sig_strgth = arb
+Units CO2_1_diff_press = kPa
+Units CO2_1_span_valve_flow = l/min
+Units CO2_2_span = umol/mol
+Units CO2_2_span_tmpr = C
+Units CO2_2_span_press = kPa
+Units CO2_2_CO2_sig_strgth = arb
+Units CO2_2_diff_press = kPa
+Units CO2_2_span_valve_flow = l/min
+Units CO2_3_span = umol/mol
+Units CO2_3_span_tmpr = C
+Units CO2_3_span_press = kPa
+Units CO2_3_CO2_sig_strgth = arb
+Units CO2_3_diff_press = kPa
+Units CO2_3_span_valve_flow = l/min
+Units CO2_4_span = umol/mol
+Units CO2_4_span_tmpr = C
+Units CO2_4_span_press = kPa
+Units CO2_4_CO2_sig_strgth = arb
+Units CO2_4_diff_press = kPa
+Units CO2_4_span_valve_flow = l/min
+Units Td_span = C
+Units H2O_span = mmol/mol
+Units H2O_span_tmpr = C
+Units H2O_span_press = kPa
+Units H2O_H2O_sig_strgth = arb
+Units H2O_diff_press = kPa
+Units H2O_span_valve_flow = l/min
+
+'Default and calculated tube delays for the EC155.
+Public tube_dly            'Online tube delay that is applied to the EC155 CO2 and H2O measurement.
+Units tube_dly = scans
+Dim tube_dly_prev          'Used to identify when to compute a new cp_rec_bck.
+
+'Constants and variables used to control the valve module temperature and flow from the valve module to the sample cell.
+Const VALVE_AUTO_WARM_UP_SECONDS = 1800
+Const VALVE_TMPR_SET_PT_LOW = 2
+Const VALVE_TMPR_SET_PT_HIGH = 50
+Const VALVE_TMPR_DEAD_BAND_WIDTH = 2
+
+Public valve_manual_tmpr_ctrl_f As Boolean
+Public valve_tmpr
+Public valve_diff_press_offset
+Public valve_ctrl_press
+Public valve_flow
+Public valve_flow_set_pt = 1
+Public valve_flow_duty_cycle
+Public valve_heater_f As Boolean
+Public valve_fan_f As Boolean
+Units valve_tmpr = C
+Units valve_diff_press_offset = kPa
+Units valve_ctrl_press = kPa
+Units valve_flow = l/min
+Units valve_flow_set_pt = l/min
+Units valve_flow_duty_cycle = %
+Dim valve_tmpr_not_okay_f As Boolean
+Dim valve_auto_tmpr_ctrl_f As Boolean
+Dim valve_flow_set_pt_prev
+Dim valve_flow_duty_cycle_prev = 0.5
+Dim valve_flow_P_fact = 0.01
+Dim valve_flow_I_fact = 0.003
+Dim valve_flow_D_fact = 0
+Dim valve_flow_P
+Dim valve_flow_D
+Dim valve_flow_D2
+Dim valve_flow_prev
+Dim valve_flow_D_prev
+Dim valve_flow_ctrl_sign = -1
+Dim valve_min_flow_duty_cycle = 0.2
+Dim valve_heater As Long
+Dim valve_fan As Long
+Units valve_heater = arb
+Units valve_fan = arb
+
+'Online statistic filter variables
+Dim counts_on_site As Long
+Dim block_mean_counts_on_site As Long
+Dim omit_counts(10) As Long
+Dim omit_f As Long
+Dim site_mean_output_f As Boolean
+
+'Block mean computed every BLOCK_MEAN_LENGTH seconds.
+Dim cal_mean_out(9)
+Alias cal_mean_out(1) = CO2_mean_out
+Alias cal_mean_out(2) = H2O_mean_out
+Alias cal_mean_out(3) = cell_tmpr_mean_out
+Alias cal_mean_out(4) = cell_press_mean_out
+Alias cal_mean_out(5) = CO2_sig_strgth_mean_out
+Alias cal_mean_out(6) = H2O_sig_strgth_mean_out
+Alias cal_mean_out(7) = diff_press_mean_out
+Alias cal_mean_out(8) = Td_mean_out
+Alias cal_mean_out(9) = valve_flow_mean_out
+
+Dim mode_prev As Long          'Used to detect a new, user entered mode.
+Dim site_prev As Long          'Used to detect a new, user entered site.
+Dim index_prev As Long         'Used to detect a new, automatically selected site.
+Dim CO2_span_gas_prev          'Used to detect a new, user entered CO2 span gas.
+Dim Td_span_gas_prev           'Used to detect a new, user entered dew point span temperature.
+Dim zero_cal_prfrmd As Boolean 'Used to detect if an automatic or manual zero was performed.
+Dim CO2_cal_prfrmd As Boolean  'Used to detect if an automatic or manual CO2 span was performed.
+Dim H2O_cal_prfrmd As Boolean  'Used to detect if an automatic or manual H2O span was performed.
+
+DataTable (site_block_mean,(site<>1) AND (block_mean_counts_on_site=BLOCK_MEAN_LENGTH-1),1)
+  TableHide
+
+  Average (1,sonic_irga_raw(6),IEEE4,sonic_irga_raw(8)<>0)  'CO2_raw
+  Average (1,sonic_irga_raw(7),IEEE4,sonic_irga_raw(8)<>0)  'H2O_raw
+  Average (1,sonic_irga_raw(9),IEEE4,sonic_irga_raw(8)<>0)  'cell_tmpr_raw
+  Average (1,sonic_irga_raw(10),IEEE4,sonic_irga_raw(8)<>0) 'cell_press_raw
+  Average (1,sonic_irga_raw(11),IEEE4,sonic_irga_raw(8)<>0) 'CO2_sig_strgth_raw
+  Average (1,sonic_irga_raw(12),IEEE4,sonic_irga_raw(8)<>0) 'H2O_sig_strgth_tmpr_raw
+  Average (1,sonic_irga_raw(13),IEEE4,sonic_irga_raw(8)<>0) 'diff_press_raw
+  Average (1,Td,IEEE4,sonic_irga_raw(8)<>0)                 'raw dew point temperature
+  Average (1,valve_flow,IEEE4,sonic_irga_raw(8)<>0)         'valve flow
+EndTable
+
+
+'Save the field calibration data each time an online field zero and span is performed.
+DataTable (onlincal,TRUE,ONLINCAL_SZE_CPU)
+  CardOut (0,336)
+
+  Sample (41,CO2_gain,IEEE4)
+  Sample (3,CO2_span_gas,IEEE4)
+  Sample (1,valve_diff_press_offset,IEEE4)
+EndTable
+
+'Define Program Control Menu
+DisplayMenu ("System Control",TRUE)
+  MenuItem ("Sonic Azmth",sonic_azimuth)
+  SubMenu ("Change Press Source")
+    MenuItem ("Select Srce",press_source_array(1,2))
+      MenuPick (BB,EB)
+    MenuItem ("Set Source",set_press_source_f)
+      MenuPick (True)
+  EndSubMenu
+  MenuItem("Mode",mode)
+    MenuPick (EC_on_auto_zro_spn,Sample_pump_off,Zero_all,Span_CO2_1,Span_CO2_2,Span_CO2_3,Span_CO2_4,Span_H2O,EC_off_auto_zro_spn)
+  SubMenu ("On Site Zero & Span")
+    SubMenu ("Span Concentrations")
+      MenuItem ("CO2",CO2_span_gas)
+      MenuItem ("Td",Td_span_gas)
+    EndSubMenu
+    MenuItem ("Do Zero",do_zero_f)
+      MenuPick (True)
+    MenuItem ("Do CO2 Span",do_CO2_span_f)
+      MenuPick (True)
+    MenuItem ("Do H2O Span",do_H2O_span_f)
+      MenuPick (True)
+  EndSubMenu
+  SubMenu("View Data")
+    MenuItem ("Valve Manual Tmpr Ctrl",valve_manual_tmpr_ctrl_f)
+      MenuPick (True,False)
+    DisplayValue ("Valve Tmpr",valve_tmpr)
+    DisplayValue ("CO2 um/m",CO2)
+    DisplayValue ("H2O mm/m",H2O)
+    DisplayValue ("Td degrees C",Td)
+    DisplayValue ("Site",site)
+    DisplayValue ("Sec on Site",sec_on_site)
+  EndSubMenu
+  MenuItem ("Dfl Tub Dly",tube_dly)
+EndMenu
+
+TimedControl (1,0,Sec,SITE_1,index,set_valve,1
+'*** End of valve module constants, variables, and working data table ***
+
+
+'*** Beginning of sample intake heater control variables ***
+Const INTAKE_HEATER_VOLTS_MAX = 4.5375
+Const INTAKE_HEATER_PWR_MAX = INTAKE_HEATER_VOLTS_MAX*INTAKE_HEATER_VOLTS_MAX/30 'R = 30 ohms.
+Const INTAKE_HEATER_LWS_MAX = 344 'Leaf wetness to apply maximum power.
+Const INTAKE_HEATER_LWS_MIN = 323 'Leaf wetness to apply minimum power.
+Const INTAKE_HEATER_SLOPE = INTAKE_HEATER_PWR_MAX/(INTAKE_HEATER_LWS_MAX-INTAKE_HEATER_LWS_MIN)
+Const INTAKE_HEATER_OFFSET = INTAKE_HEATER_PWR_MAX-INTAKE_HEATER_LWS_MAX*INTAKE_HEATER_SLOPE
+Public lws
+Public intake_heater_power
+Public intake_heater_volts
+Dim intake_heater As Long
+'*** End of sample intake heater control variables ***
+
+
+
+'*** Beginning of output data tables ***
+DataTable (flux,TRUE,FLUX_SIZE_CPU)
+  DataInterval (0,OUTPUT_INTERVAL,Min,10)
+  CardOut (0,-1)
+
+  '*** Beginning of CSAT3A sonic head output data ***
+  Sample (18,Hs,IEEE4)
+  Average (4,Ux,IEEE4,sonic_disable_f)
+  Sample (1,sonic_azimuth,IEEE4)
+  Totalize (1,n,IEEE4,sonic_disable_f)
+  FieldNames ("sonic_samples_Tot")
+  Totalize (1,n,IEEE4,diag_sonic<>-1)
+  FieldNames ("no_sonic_head_Tot")
+  Totalize (1,n,IEEE4,diag_sonic<>NAN)
+  FieldNames ("no_new_sonic_data_Tot")
+  Totalize (1,n,IEEE4,amp_l_f IMP (diag_sonic=NAN))
+  FieldNames ("amp_l_f_Tot")
+  Totalize (1,n,IEEE4,amp_h_f IMP (diag_sonic=NAN))
+  FieldNames ("amp_h_f_Tot")
+  Totalize (1,n,IEEE4,sig_lck_f IMP (diag_sonic=NAN))
+  FieldNames ("sig_lck_f_Tot")
+  Totalize (1,n,IEEE4,del_T_f IMP (diag_sonic=NAN))
+  FieldNames ("del_T_f_Tot")
+  Totalize (1,n,IEEE4,aq_sig_f IMP (diag_sonic=NAN))
+  FieldNames ("aq_sig_f_Tot")
+  Totalize (1,n,IEEE4,sonic_cal_err_f IMP (diag_sonic=NAN))
+  FieldNames ("sonic_cal_err_f_Tot")
+  '*** End of CSAT3A sonic head output data ***
+
+  '*** Beginning of EC155 output data ***
+  Sample (22,Fc,IEEE4)
+  Average (1,diff_press,IEEE4,irga_bad_data_f OR (calib_type_CO2<>1) OR (calib_type_H2O<>1))
+  Average (1,Td,IEEE4,irga_bad_data_f OR (calib_type_CO2<>1) OR (calib_type_H2O<>1))
+  Sample (1,factor_CO2,IEEE4)
+  Sample (1,factor_H2O,IEEE4)
+  Totalize (1,n,IEEE4,irga_disable_f OR (calib_type_CO2<>1) OR (calib_type_H2O<>1))
+  FieldNames ("irga_samples_Tot")
+  Totalize (1,n,IEEE4,diag_irga<>-1)
+  FieldNames ("no_irga_head_Tot")
+  Totalize (1,n,IEEE4,diag_irga<>NAN)
+  FieldNames ("no_new_irga_data_Tot")
+  Totalize (1,n,IEEE4,irga_bad_data_f IMP (diag_irga=NAN))
+  FieldNames ("irga_bad_data_f_Tot")
+  Totalize (1,n,IEEE4,gen_sys_fault_f IMP (diag_irga=NAN))
+  FieldNames ("gen_sys_fault_f_Tot")
+  Totalize (1,n,IEEE4,sys_startup_f IMP (diag_irga=NAN))
+  FieldNames ("sys_startup_f_Tot")
+  Totalize (1,n,IEEE4,motor_spd_f IMP (diag_irga=NAN))
+  FieldNames ("motor_spd_f_Tot")
+  Totalize (1,n,IEEE4,tec_tmpr_f IMP (diag_irga=NAN))
+  FieldNames ("tec_tmpr_f_Tot")
+  Totalize (1,n,IEEE4,src_pwr_f IMP (diag_irga=NAN))
+  FieldNames ("src_pwr_f_Tot")
+  Totalize (1,n,IEEE4,src_tmpr_f IMP (diag_irga=NAN))
+  FieldNames ("src_tmpr_f_Tot")
+  Totalize (1,n,IEEE4,src_curr_f IMP (diag_irga=NAN))
+  FieldNames ("src_curr_f_Tot")
+  Totalize (1,n,IEEE4,irga_off_f IMP (diag_irga=NAN))
+  FieldNames ("irga_off_f_Tot")
+  Totalize (1,n,IEEE4,irga_sync_f IMP (diag_irga=NAN))
+  FieldNames ("irga_sync_f_Tot")
+  Totalize (1,n,IEEE4,cell_tmpr_f IMP (diag_irga=NAN))
+  FieldNames ("cell_tmpr_f_Tot")
+  Totalize (1,n,IEEE4,cell_press_f IMP (diag_irga=NAN))
+  FieldNames ("cell_press_f_Tot")
+  Totalize (1,n,IEEE4,CO2_I_f IMP (diag_irga=NAN))
+  FieldNames ("CO2_I_f_Tot")
+  Totalize (1,n,IEEE4,CO2_Io_f IMP (diag_irga=NAN))
+  FieldNames ("CO2_Io_f_Tot")
+  Totalize (1,n,IEEE4,H2O_I_f IMP (diag_irga=NAN))
+  FieldNames ("H2O_I_f_Tot")
+  Totalize (1,n,IEEE4,H2O_Io_f IMP (diag_irga=NAN))
+  FieldNames ("H2O_Io_f_Tot")
+  Totalize (1,n,IEEE4,CO2_Io_var_f IMP (diag_irga=NAN))
+  FieldNames ("CO2_Io_var_f_Tot")
+  Totalize (1,n,IEEE4,H2O_Io_var_f IMP (diag_irga=NAN))
+  FieldNames ("H2O_Io_var_f_Tot")
+  Totalize (1,n,IEEE4,CO2_sig_strgth_f IMP (diag_irga=NAN))
+  FieldNames ("CO2_sig_strgth_f_Tot")
+  Totalize (1,n,IEEE4,H2O_sig_strgth_f IMP (diag_irga=NAN))
+  FieldNames ("H2O_sig_strgth_f_Tot")
+  Average (1,CO2_sig_strgth,IEEE4,irga_disable_f)
+  FieldNames ("CO2_sig_strgth_mean")
+  Average (1,H2O_sig_strgth,IEEE4,irga_disable_f)
+  FieldNames ("H2O_sig_strgth_mean")
+  '*** End of EC155 output data ***
+
+  '*** Beginning of sample pump module output data ***
+  Average (1,pump_tmpr,IEEE4,FALSE)
+  Average (1,pump_press,IEEE4,FALSE)
+  Average (1,pump_flow_duty_cycle,IEEE4,(calib_type_CO2<>1) OR (calib_type_H2O<>1))
+  Average (1,pump_flow,IEEE4,(calib_type_CO2<>1) OR (calib_type_H2O<>1))
+  StdDev (1,pump_flow,IEEE4,(calib_type_CO2<>1) OR (calib_type_H2O<>1))
+  Sample (1,pump_flow_set_pt,IEEE4)
+  Average (1,pump_heater,IEEE4,FALSE)
+  Average (1,pump_fan,IEEE4,FALSE)
+  Average (1,pump_off,IEEE4,FALSE)
+  '*** End of sample pump module output data ***
+
+  '*** Beginning of valve module output data ***
+  Average (1,valve_tmpr,IEEE4,slowsequence_disable_f)
+  Average (1,valve_heater,IEEE4,slowsequence_disable_f)
+  Average (1,valve_fan,IEEE4,slowsequence_disable_f)
+  '*** End of valve module output data ***
+
+  '*** Beginning of sample intake heater output data ***
+  Average (1,intake_heater,IEEE4,slowsequence_disable_f)
+  '*** End of sample intake heater output data ***
+
+  '*** Beginning of other output data ***
+  Average (1,panel_tmpr,IEEE4,slowsequence_disable_f)
+  Average (1,batt_volt,IEEE4,slowsequence_disable_f)
+  '*** End of other output data ***
+
+  Totalize (1,n,IEEE4,slowsequence_disable_f)
+  FieldNames ("slowsequence_Tot")
+EndTable
+
+
+'Time series data.
+DataTable (ts_data,TRUE,-1)
+  DataInterval (0,SCAN_INTERVAL,mSec,100)
+  CardOut (0,-1)
+
+  '*** Beginning of CSAT3(A) time series output ***
+  Sample (5,sonic_irga_raw(1),IEEE4)
+  FieldNames ("Ux,Uy,Uz,Ts,diag_sonic")
+  Units Ux = m/s
+  Units Uy = m/s
+  Units Uz = m/s
+  Units Ts = C
+  Units diag_sonic = arb
+  '*** End of CSAT3(A) time series output ***
+
+  '*** Beginning of EC155 time series output ***
+  Sample (8,sonic_irga_raw(6),IEEE4)
+  FieldNames ("CO2,H2O,diag_irga,cell_tmpr,cell_press,CO2_sig_strgth,H2O_sig_strgth,diff_press")
+  Units CO2 = umol/mol
+  Units H2O = mmol/mol
+  Units diag_irga = arb
+  Units cell_tmpr = C
+  Units cell_press = kPa
+  Units CO2_sig_strgth = arb
+  Units H2O_sig_strgth = arb
+  Units diff_press = kPa
+  '*** End of EC155 time series output ***
+
+  '*** Beginning of system state output ***
+  Sample (1,pump_flow,IEEE4)
+  Sample (1,calib_type_raw,IEEE4)
+  FieldNames ("calib_type")
+  '*** End of system state output ***
+EndTable
+'*** End of output data tables ***
+
+
+'*** Beginning of generic PID control subroutine ***
+Sub pid_cnrl (ctrl_var_duty_cycle,ctrl_var,ctrl_var_set_pt,ctrl_var_prev,ctrl_var_D_prev,ctrl_var_ctrl_sign,min_ctrl_var_duty_cycle,ctrl_var_P_fact,ctrl_var_I_fact,ctrl_var_D_fact)
+  Dim ctrl_var_P
+  Dim ctrl_var_D
+  Dim ctrl_var_D2
+
+  ctrl_var_P = ctrl_var-ctrl_var_set_pt    'Compute the control variable error.
+  ctrl_var_D = ctrl_var-ctrl_var_prev      'Compute the derivative of the control variable error.
+  ctrl_var_D2 = ctrl_var_D-ctrl_var_D_prev 'Compute the second derivative of the control variable error.
+
+  ctrl_var_prev = ctrl_var
+  ctrl_var_D_prev = ctrl_var_D
+
+  If ( counts_on_site > 1 ) Then
+    'Compute the correction to the conrol variable duty cycle.
+    ctrl_var_duty_cycle = ctrl_var_duty_cycle+ctrl_var_ctrl_sign*(ctrl_var_D*ctrl_var_P_fact+ctrl_var_P*ctrl_var_I_fact+ctrl_var_D2*ctrl_var_D_fact)
+
+    'Anti-windup.
+    Select Case ctrl_var_duty_cycle
+    Case Is < min_ctrl_var_duty_cycle
+      ctrl_var_duty_cycle = min_ctrl_var_duty_cycle
+    Case Is > 1
+      ctrl_var_duty_cycle = 1
+    EndSelect
+  EndIf
+EndSub
+'*** End of generic PID control subroutine ***
+
+
+'*** Beginning of load valve control and timing variables ***
+Sub load_default_timing
+ 'Load site valve settings and sequence.
+  set_valve(1,1) = SITE_2  'Atmosphere without sample pump.
+  set_valve(2,1) = SITE_4  'CO2 #1 span.
+  set_valve(3,1) = SITE_3  'Zero.
+  set_valve(4,1) = SITE_3  'Zero.
+  set_valve(5,1) = SITE_4  'CO2 #1 span.
+  set_valve(6,1) = SITE_5  'CO2 #2 span.
+  set_valve(7,1) = SITE_6  'CO2 #3 span.
+  set_valve(8,1) = SITE_7  'CO2 #4 span.
+  set_valve(9,1) = SITE_8  'H2O span.
+  set_valve(10,1) = SITE_1 'Atmosphere with sample pump.
+  
+  'Load valve timing information.
+  set_valve(1,2) = SECONDS_ON_SITE_2/SCAN_INTERVAL_SECONDS   'Number of scans on site 2 (atmosphere without sample pump).
+  set_valve(2,2) = SECONDS_ON_SITE_4a/SCAN_INTERVAL_SECONDS  'Number of scans on site 4 (CO2 #1 span, first visit).
+  set_valve(3,2) = SECONDS_ON_SITE_3a/SCAN_INTERVAL_SECONDS  'Number of scans on site 3 (Zero, first visit).
+  set_valve(4,2) = SECONDS_ON_SITE_3b/SCAN_INTERVAL_SECONDS  'Number of scans on site 3 (Zero, second visit).
+  set_valve(5,2) = SECONDS_ON_SITE_4b/SCAN_INTERVAL_SECONDS  'Number of scans on site 4 (CO2 #1 span, second visit).
+  set_valve(6,2) = SECONDS_ON_SITE_5/SCAN_INTERVAL_SECONDS   'Number of scans on site 5 (CO2 #2 span).
+  set_valve(7,2) = SECONDS_ON_SITE_6/SCAN_INTERVAL_SECONDS   'Number of scans on site 6 (CO2 #3 span).
+  set_valve(8,2) = SECONDS_ON_SITE_7/SCAN_INTERVAL_SECONDS   'Number of scans on site 7 (CO2 #4 span).
+  set_valve(9,2) = SECONDS_ON_SITE_8/SCAN_INTERVAL_SECONDS   'Number of scans on site 8 (H2O span).
+  set_valve(10,2) = SECONDS_ON_SITE_1/SCAN_INTERVAL_SECONDS  'Number of scans on site 1 (atmosphere).
+
+  'Compute omit counts.
+  omit_counts(1) = OMIT_SECONDS_SITE_2/SCAN_INTERVAL_SECONDS  'Number of scans of data to omit from atmosphere without sample pump (site 2).
+  omit_counts(2) = OMIT_SECONDS_SITE_4/SCAN_INTERVAL_SECONDS  'Number of scans of data to omit from CO2 #1 span (site 4).
+  omit_counts(3) = OMIT_SECONDS_SITE_3/SCAN_INTERVAL_SECONDS  'Number of scans of data to omit from zero (site 3).
+  omit_counts(4) = SECONDS_ON_SITE_3b/SCAN_INTERVAL_SECONDS   'Omit all scans of data on second visit to zero (site 3).
+  omit_counts(5) = SECONDS_ON_SITE_4b/SCAN_INTERVAL_SECONDS   'Omit all scans of data on second visit to CO2 #1 span (site 4).
+  omit_counts(6) = OMIT_SECONDS_SITE_5/SCAN_INTERVAL_SECONDS  'Number of scans of data to omit from CO2 #2 span (site 5).
+  omit_counts(7) = OMIT_SECONDS_SITE_6/SCAN_INTERVAL_SECONDS  'Number of scans of data to omit from CO2 #3 span (site 6).
+  omit_counts(8) = OMIT_SECONDS_SITE_7/SCAN_INTERVAL_SECONDS  'Number of scans of data to omit from CO2 #4 span (site 7).
+  omit_counts(9) = OMIT_SECONDS_SITE_8/SCAN_INTERVAL_SECONDS  'Number of scans of data to omit from H2O span (site 8).
+  omit_counts(10) = OMIT_SECONDS_SITE_1/SCAN_INTERVAL_SECONDS 'Number of scans of data to omit from atmosphere (site 1).
+EndSub
+'*** End of load valve control and timing variables ***
+
+
+
+'*** Program ***
+
+BeginProg
+  Call load_default_timing
+
+  sys_conf_var_file = FileOpen ("CPU:sys_conf_var.dat","rb",0) 'Check if a file exists.
+  FileClose (sys_conf_var_file)
+
+  If ( sys_conf_var_file = 0 ) Then
+    Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",0) 'Store the default values to the file.
+  EndIf
+  Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",1) 'Read the values from the file.
+  sonic_azimuth = sys_conf_var(1)
+  sonic_azimuth_prev = sonic_azimuth
+
+  CO2_span_gas = sys_conf_var(2)
+  CO2_span_gas_prev = CO2_span_gas
+
+  Td_span_gas = sys_conf_var(3)
+  Td_span_gas_prev = Td_span_gas
+
+  tube_dly = sys_conf_var(4)
+  tube_dly_prev = tube_dly
+
+  pump_flow_set_pt = sys_conf_var(5)
+  pump_flow_set_pt_prev = pump_flow_set_pt
+
+  valve_flow_set_pt = sys_conf_var(6)
+  valve_flow_set_pt_prev = valve_flow_set_pt
+
+  mode = sys_conf_var(8)
+
+
+  'Set the SDM clock speed.
+  SDMSpeed (SDM_PER)
+  Scan (SCAN_INTERVAL,mSec,SCAN_BUFFER_SIZE,0)
+    'Datalogger panel temperature.
+    PanelTemp (panel_tmpr,250)
+
+
+    '*** Beginning of EC155 w/ CSAT3A sonic head measurements ***
+    'Get EC155 w/ CSAT3A sonic head data.
+    EC100 (sonic_irga_raw(1),EC100_SDM_ADDR,2)
+    EC100Configure (config_result,EC100_SDM_ADDR,218,intake_heater_volts) 'Set heater voltage.
+
+    If ( sonic_irga_raw(8) = NAN ) Then 'The EC155 diagnostic word (diag_irga) is sonic_irga_raw(8).
+      NAN_cnt = NAN_cnt+1
+      configure_ec100_f = FALSE
+    Else
+      If ( NAN_cnt > 4 ) Then ( configure_ec100_f = TRUE )
+      NAN_cnt = 0
+    EndIf
+
+    If ( configure_ec100_f ) Then
+      Call Config (config_array(1,1),3,configure_ec100_f)
+    ElseIf ( ec155_power_f ) Then
+      Call Config (power_array(1,1),1,ec155_power_f)
+    ElseIf ( set_press_source_f ) Then
+      Call Config (press_source_array(1,1),1,set_press_source_f)
+      If ( NOT (set_press_source_f) ) Then ( EC100Configure (config_result,EC100_SDM_ADDR,99,2718) )
+    ElseIf ( do_zero_f ) Then
+      Call Config (zero_array(1,1),1,do_zero_f)
+    ElseIf ( do_CO2_span_f ) Then
+      span_CO2_array(1,2) = CO2_span_gas
+      Call Config (span_CO2_array(1,1),2,do_CO2_span_f)
+    ElseIf ( do_H2O_span_f )
+      span_H2O_array(1,2) = Td_span_gas
+      Call Config (span_H2O_array(1,1),2,do_H2O_span_f)
+    EndIf
+
+    CallTable delay_3d
+    CallTable delay_cs
+    '*** End of EC155 w/ CSAT3A sonic head measurements ***
+
+
+    'Check for out of range menu (mode) input.
+    If ( (mode < EC_on_auto_zro_spn) OR (mode > EC_off_auto_zro_spn) ) Then ( mode = mode_prev )
+
+    'Disable automatic zero and span until user enters the CO2 span bottle concentration.
+    If ( (CO2_span_gas = 0) AND (mode <> EC_off_auto_zro_spn) ) Then ( mode = EC_off_auto_zro_spn )
+
+    'Indicate site.
+    If ( mode = EC_on_auto_zro_spn ) Then
+      If ( index = 0 ) Then
+        site = 1
+      Else
+        site = site_sequence(index)
+      EndIf
+    Else
+      If ( mode = EC_off_auto_zro_spn ) Then (site = 1 ) Else ( site = mode )
+    EndIf
+
+    'Increment or reset counts_on_site and sec_on_site variable.
+    If ( (index_prev <> index) OR (site_prev <> site) ) Then
+      site_prev = site
+      index_prev = index
+      counts_on_site = 0
+    Else
+      counts_on_site = counts_on_site+1
+    EndIf
+    block_mean_counts_on_site = counts_on_site MOD BLOCK_MEAN_LENGTH
+    sec_on_site = counts_on_site*SCAN_INTERVAL_SECONDS
+
+    CallTable site_block_mean
+    If ( site_block_mean.Output(1,1) ) Then
+      GetRecord (cal_mean_out(1),site_block_mean,1)
+      site_mean_output_f = TRUE
+    EndIf
+
+    'Change mode on user input and find mean calibration statistics.
+    Select Case mode
+    Case Is = EC_on_auto_zro_spn    'Run automatic zero and span.
+      If ( mode_prev <> mode ) Then
+        mode_prev = mode
+
+        Call load_default_timing
+        TimedControl (MAXIMUM_SITES_IN_SEQUENCE,CYCLE_TIME,Sec,SITE_1,index,set_valve,1)
+      EndIf
+      If ( index = 0 ) Then ( index = 10 )
+      If ( counts_on_site < omit_counts(index) ) Then ( omit_f = &b10000 ) Else ( omit_f = &b00000 )
+      calib_type_raw = site OR omit_f
+      Select Case site
+      Case Is = Sample_pump_off     'Measure differential pressure with the sample pump off.
+        If ( site_mean_output_f ) Then
+          site_mean_output_f = FALSE
+
+          valve_diff_press_offset = diff_press_mean_out
+        EndIf
+      Case Is = Zero_all
+        If ( site_mean_output_f AND (index = 3) ) Then
+          site_mean_output_f = FALSE
+
+          CO2_zero = CO2_mean_out
+          H2O_zero = H2O_mean_out
+          zero_tmpr = cell_tmpr_mean_out
+          zero_press = cell_press_mean_out
+          zero_CO2_sig_strgth = CO2_sig_strgth_mean_out
+          zero_H2O_sig_strgth = H2O_sig_strgth_mean_out
+          zero_diff_press = diff_press_mean_out
+          zero_valve_flow = valve_flow_mean_out
+
+          zero_cal_prfrmd = TRUE
+        EndIf
+       If ( (counts_on_site = set_valve(4,2)-BLOCK_MEAN_LENGTH) AND (index = 4) AND (valve_flow > 0.9*valve_flow_set_pt) ) Then ( do_zero_f = TRUE )
+      Case Is = Span_CO2_1
+        If ( site_mean_output_f AND (index = 2) ) Then
+          site_mean_output_f = FALSE
+
+          CO2_1_span = CO2_mean_out
+          CO2_1_span_tmpr = cell_tmpr_mean_out
+          CO2_1_span_press = cell_press_mean_out
+          CO2_1_CO2_sig_strgth = CO2_sig_strgth_mean_out
+          CO2_1_diff_press = diff_press_mean_out
+          CO2_1_span_valve_flow = valve_flow_mean_out
+
+          CO2_cal_prfrmd = TRUE
+        EndIf
+        If ( (counts_on_site = set_valve(5,2)-BLOCK_MEAN_LENGTH) AND (index = 5) AND (valve_flow > 0.9*valve_flow_set_pt) ) Then ( do_CO2_span_f = TRUE )
+      Case Is = Span_CO2_2
+        If ( site_mean_output_f ) Then
+          site_mean_output_f = FALSE
+
+          CO2_2_span = CO2_mean_out
+          CO2_2_span_tmpr = cell_tmpr_mean_out
+          CO2_2_span_press = cell_press_mean_out
+          CO2_2_CO2_sig_strgth = CO2_sig_strgth_mean_out
+          CO2_2_diff_press = diff_press_mean_out
+          CO2_2_span_valve_flow = valve_flow_mean_out
+        EndIf
+      Case Is = Span_CO2_3
+        If ( site_mean_output_f ) Then
+          site_mean_output_f = FALSE
+
+          CO2_3_span = CO2_mean_out
+          CO2_3_span_tmpr = cell_tmpr_mean_out
+          CO2_3_span_press = cell_press_mean_out
+          CO2_3_CO2_sig_strgth = CO2_sig_strgth_mean_out
+          CO2_3_diff_press = diff_press_mean_out
+          CO2_3_span_valve_flow = valve_flow_mean_out
+        EndIf
+      Case Is = Span_CO2_4
+        If ( site_mean_output_f ) Then
+          site_mean_output_f = FALSE
+
+          CO2_4_span = CO2_mean_out
+          CO2_4_span_tmpr = cell_tmpr_mean_out
+          CO2_4_span_press = cell_press_mean_out
+          CO2_4_CO2_sig_strgth = CO2_sig_strgth_mean_out
+          CO2_4_diff_press = diff_press_mean_out
+          CO2_4_span_valve_flow = valve_flow_mean_out
+        EndIf
+      Case Is = Span_H2O
+        If ( site_mean_output_f ) Then
+          site_mean_output_f = FALSE
+
+          H2O_span = H2O_mean_out
+          H2O_span_tmpr = cell_tmpr_mean_out
+          H2O_span_press = cell_press_mean_out
+          Td_span = Td_mean_out
+          H2O_span_valve_flow = valve_flow_mean_out
+
+          H2O_cal_prfrmd = TRUE
+        EndIf
+      EndSelect
+    Case Is = Sample_pump_off       'Measure cell pressure with the sample pump off.
+      If ( mode_prev <> mode ) Then
+        mode_prev = mode
+
+        set_valve(1,1) = SITE_2     'Pressure without sample pump.
+        set_valve(1,2) = 1          'Number of scans on sample pump off (site 2).
+        TimedControl (1,0,Sec,SITE_2,index,set_valve,1)
+      EndIf
+
+      If ( site_mean_output_f ) Then
+        site_mean_output_f = FALSE
+
+        valve_diff_press_offset = diff_press_mean_out
+      EndIf
+      calib_type_raw = site OR &b100000
+    Case Is = Zero_all              'Start manual CO2 and H2O zero.
+      If ( (mode_prev <> mode) AND NOT (valve_tmpr_not_okay_f) ) Then
+        mode_prev = mode
+
+        set_valve(1,1) = SITE_3     'Zero gas.
+        set_valve(1,2) = 1          'Number of scans on zero gas (site 3).
+        TimedControl (1,0,Sec,SITE_3,index,set_valve,1)
+      Else
+        mode = mode_prev
+      EndIf
+      calib_type_raw = site OR &b100000
+    Case Is = Span_CO2_1            'Start manual CO2 #1 span.
+      If ( (mode_prev <> mode) AND NOT (valve_tmpr_not_okay_f) ) Then
+        mode_prev = mode
+
+        set_valve(1,1) = SITE_4     'CO2 #1 span gas.
+        set_valve(1,2) = 1          'Number of scans on CO2 #1 span (site 4).
+        TimedControl (1,0,Sec,SITE_4,index,set_valve,1)
+      Else
+        mode = mode_prev
+      EndIf
+      calib_type_raw = site OR &b100000
+    Case Is = Span_CO2_2            'Start manual CO2 #2 span.
+      If ( (mode_prev <> mode) AND NOT (valve_tmpr_not_okay_f) ) Then
+        mode_prev = mode
+
+        set_valve(1,1) = SITE_5     'CO2 #2 span gas.
+        set_valve(1,2) = 1          'Number of scans on CO2 #2 span (site 5).
+        TimedControl (1,0,Sec,SITE_5,index,set_valve,1)
+      Else
+        mode = mode_prev
+      EndIf
+      calib_type_raw = site OR &b100000
+    Case Is = Span_CO2_3            'Start manual CO2 #3 span.
+      If ( (mode_prev <> mode) AND NOT (valve_tmpr_not_okay_f) ) Then
+        mode_prev = mode
+
+        set_valve(1,1) = SITE_6     'CO2 #3 span gas.
+        set_valve(1,2) = 1          'Number of scans on CO2 #3 span (site 6).
+        TimedControl (1,0,Sec,SITE_6,index,set_valve,1)
+      Else
+        mode = mode_prev
+      EndIf
+      calib_type_raw = site OR &b100000
+    Case Is = Span_CO2_4            'Start manual CO2 #4 span.
+      If ( (mode_prev <> mode) AND NOT (valve_tmpr_not_okay_f) ) Then
+        mode_prev = mode
+
+        set_valve(1,1) = SITE_7     'CO2 #4 span gas.
+        set_valve(1,2) = 1          'Number of scans on CO2 #4 span (site 7).
+        TimedControl (1,0,Sec,SITE_7,index,set_valve,1)
+      Else
+        mode = mode_prev
+      EndIf
+      calib_type_raw = site OR &b100000
+    Case Is = Span_H2O              'Start manual H2O span.
+      If ( (mode_prev <> mode) AND NOT (valve_tmpr_not_okay_f) ) Then
+        mode_prev = mode
+
+        set_valve(1,1) = SITE_8     'H2O span gas.
+        set_valve(1,2) = 1          'Number of scans on H2O span (site 8).
+        TimedControl (1,0,Sec,SITE_5,index,set_valve,1)
+      Else
+        mode = mode_prev
+      EndIf
+      calib_type_raw = site OR &b100000
+    Case Is = EC_off_auto_zro_spn   'Disable automatic zero and span.
+      If ( mode_prev <> mode ) Then
+        mode_prev = mode
+
+        set_valve(1,1) = SITE_1     'Atmosphere with sample pump.
+        set_valve(1,2) = 1          'Number of scans on atmosphere (site 1).
+        TimedControl (1,0,Sec,SITE_1,index,set_valve,1)
+      EndIf
+      If ( counts_on_site < omit_counts(10) ) Then ( omit_f = &b10000 ) Else ( omit_f = &b00000 )
+      calib_type_raw = site OR omit_f
+    EndSelect
+
+    'Save time series data.
+    CallTable ts_data
+
+    If ( scan_count >= OFFSET ) Then
+
+
+      '*** Beginning of CSAT3A sonic head processing ***
+      'Load in CSAT3A sonic head data that has been lagged by EC155_REC_BCK scans.
+      GetRecord (dly_data_out(1),delay_3d,EC155_REC_BCK)
+
+      Move (Ux,5,dly_data_out(1),5) 'Ux, Uy, Uz, Ts, diag_sonic
+
+      'Extract the six warning flags from the sonic diagnostic word.
+      If ( (diag_sonic <> NAN) AND (diag_sonic <> -1) ) Then ( diag_sonic_tmp = diag_sonic ) Else ( diag_sonic_tmp = &h3f)
+      mask = &h1
+      For i = 1 To 6
+        diag_bits_sonic(i) = diag_sonic_tmp AND mask
+        mask = mask*2
+      Next i
+
+      'Turn on the intermediate processing disable flag when any CSAT3A sonic head
+      'warning flag is high.
+      sonic_disable_f = diag_sonic_tmp AND &h3f
+
+      Ts_absolute = Ts+273.15
+
+      'Load the arrays that hold the input data for the covariance instructions.
+      cov_array_sonic(1,1) = Ts
+      Move (cov_array_sonic(1,2),3,Ux,3)
+      CallTable comp_cov_3d
+      If ( comp_cov_3d.Output(1,1) ) Then
+        GetRecord (Ts_stdev,comp_cov_3d,1)
+
+        'Rotate the CSAT3A sonic head RHC system so the negative x-axis points north.
+        wnd_dir_compass = (360+sonic_azimuth-wnd_dir_sonic) MOD 360
+
+        'Make the CSAT3A sonic head wind direction fall between 0 to 180 degrees and 0 to -180 degrees.
+        If ( wnd_dir_sonic > 180 ) Then ( wnd_dir_sonic = wnd_dir_sonic-360 )
+
+        'Compute online fluxes.
+        tau = SQR ((Ux_Uz_cov*Ux_Uz_cov)+(Uy_Uz_cov*Uy_Uz_cov))
+        u_star = SQR (tau)
+
+        'Compute the standard deviation from the variance.
+        Ts_stdev = SQR (Ts_stdev)
+        Ux_stdev = SQR (Ux_stdev)
+        Uy_stdev = SQR (Uy_stdev)
+        Uz_stdev = SQR (Uz_stdev)
+      EndIf
+      '*** End of CSAT3A sonic head processing ***
+
+
+      '*** Beginning of EC155 processing ***
+      'Load in the EC155 data that has been lagged by EC155_REC_BCK scans.
+      GetRecord (dly_data_out(1),delay_cs,cp_rec_bck) 'Assume CO2 and H2O is the same.
+      Move (CO2,9,dly_data_out(1),9) 'CO2, H2O, diag_irga, cell_tmpr, cell_press, CO2_sig_strgth, H2O_sig_strgth, diff_press, calib_type
+
+      calib_type_CO2 = calib_type
+      calib_type_H2O = calib_type
+      amb_press = cell_press-diff_press 'Compute ambient pressure.
+
+      H2O_span_gas = (1.00072+3.2e-5*cell_press+5.9e-9*cell_press*cell_tmpr*cell_tmpr)*(611.21/cell_press)*EXP (Td_span_gas*17.502/(240.97+Td_span_gas)) 'Buck (1981) Eq. (2a, 3a, & 6)
+
+      'Compute the EC155 dew point temperature from the H2O mixing ratio at the system pressure.
+      Td_tmp = LOG (cell_press*H2O/(0.61121*(1.00072+3.2e-5*cell_press+5.9e-9*cell_press*cell_tmpr*cell_tmpr)*(1000+H2O)))
+      Td = (240.97*Td_tmp)/(17.502-Td_tmp) 'Buck (1981) Eq. (2a, 3a, & 6) and Leuning (2004) Eq. (6.23)
+
+      'Extract the twenty one flags from the gas analyzer diagnostic word.
+      If ( (diag_irga <> NAN) AND (diag_irga <> -1) ) Then ( diag_irga_tmp = diag_irga ) Else ( diag_irga_tmp = &h1fffff)
+      mask = &h1
+      For i = 1 To 21
+        diag_bits_irga(i) = diag_irga_tmp AND mask
+        mask = mask*2
+      Next i
+
+      If ( (cell_tmpr < EC155_PWR_DN_TMPR) AND (NOT (irga_off_f)) AND (diag_irga <> NAN) AND (diag_irga <> -1) ) Then
+        ec155_power_f = TRUE
+        power_array(1,2) = 1 'Turn off gas head.
+      ElseIf ( (cell_tmpr > EC155_PWR_UP_TMPR) AND (irga_off_f) AND (diag_irga <> NAN) AND (diag_irga <> -1) ) Then
+        ec155_power_f = TRUE
+        power_array(1,2) = 0 'Turn on gas head.
+      EndIf
+
+      'Compute fast response air temperature from sonic temperature and EC155 vapor density.
+      Tc = (Ts_absolute/(1+0.32*H2O/(1000+H2O)))-273.15 'Kaimal and Gaynor (1991) Eq. (3).
+
+
+      'Filter data in the covariance instruction if the EC155 /w CSAT3A sonic head reports bad data.
+      irga_disable_f = sonic_disable_f OR irga_bad_data_f
+
+      'Load the arrays that hold the input data for the covariance instructions.
+      cov_array_cs(1,1) = CO2
+      Move (cov_array_cs(1,2),3,Ux,3)
+      cov_array_cs(2,1) = H2O
+      Move (cov_array_cs(2,2),3,Ux,3)
+      cov_array_cs(3,1) = Tc
+      Move (cov_array_cs(3,2),3,Ux,3)
+      CallTable comp_cov_cs
+      If ( comp_cov_cs.Output(1,1) ) Then
+        GetRecord (CO2_stdev,comp_cov_cs,1)
+
+        rho_d_mean = amb_press_mean/(RD*(Tc_mean+273.15))*(1-(H2O_mean/(1000+H2O_mean)))
+        rho_v_mean = amb_press_mean*H2O_mean/(RV*(Tc_mean+273.15)*(1000+H2O_mean))
+        rho_a_mean = (rho_d_mean+rho_v_mean)/1000
+
+        'Compute a factor to change the CS155 statistics from molar mixing ratio to mass density.
+        factor_CO2 = 0.044*amb_press_mean/(R*(Tc_mean+273.15))
+        factor_H2O = 0.018*amb_press_mean/(R*(Tc_mean+273.15))
+
+        'Compute online fluxes.
+        Fc = CO2_Uz_cov*factor_CO2
+        LE = LV*H2O_Uz_cov*factor_H2O
+
+        'Compute the standard deviation from the variance.
+        CO2_stdev = SQR (CO2_stdev)
+        H2O_stdev = SQR (H2O_stdev)
+        Tc_stdev = SQR (Tc_stdev)
+
+        'Convert from CO2 mixing ratio to CO2 mass density.
+        CO2_stdev = CO2_stdev*factor_CO2
+        CO2_Ux_cov = CO2_Ux_cov*factor_CO2
+        CO2_Uy_cov = CO2_Uy_cov*factor_CO2
+        CO2_Uz_cov = CO2_Uz_cov*factor_CO2
+        CO2_mean = CO2_mean*factor_CO2
+
+        'Convert from H2O mixing ratio to H2O mass density.
+        H2O_stdev = H2O_stdev*factor_H2O
+        H2O_Ux_cov = H2O_Ux_cov*factor_H2O
+        H2O_Uy_cov = H2O_Uy_cov*factor_H2O
+        H2O_Uz_cov = H2O_Uz_cov*factor_H2O
+        H2O_mean = H2O_mean*factor_H2O
+      EndIf
+      '*** End of EC155 processing ***
+
+
+      '*** Beginning of sonic sensible heat, momentum, and sensible heat flux processing ***
+      If ( comp_cov_3d.Output(1,1) ) Then
+        'CSAT3A sonic sensible heat flux using sonic temperature.
+        Hs = rho_a_mean*CP*Ts_Uz_cov
+
+        'CSAT3A momentum flux.
+        tau = rho_a_mean*tau
+
+        'Sensible heat flux using sonic temperature corrected for water vapor
+        'measured by the EC155.
+        Hc = rho_a_mean*CP*Tc_Uz_cov
+      EndIf
+      '*** End of sonic sensible heat, momentum, and sensible heat flux processing ***
+
+      CallTable flux
+
+      slowsequence_disable_f = TRUE
+      If ( slowsequence_finished_f ) Then
+        slowsequence_finished_f = FALSE
+        slowsequence_disable_f = FALSE
+      EndIf
+    Else
+      scan_count = scan_count+1
+    EndIf
+
+
+    '*** Beginning of sample pump module flow control ***
+    'Measure the sample pump pressure.
+    VoltSe (pump_press,1,mV5000,1,TRUE,0,250,0.022222,10.5556)
+
+    'Measure the sample pump tachometer.
+    TimerIO (pump_spd,1,2,SCAN_INTERVAL,mSec)
+    pump_flow = 0.172*pump_spd
+
+    'Pump module flow control.
+    If ( (pump_flow <> NAN) AND (site = EC_on_auto_zro_spn) AND (NOT (irga_off_f)) ) Then
+      If ( buff_depth < 2 ) Then 
+        Call pid_cnrl (pump_flow_duty_cycle,pump_flow,pump_flow_set_pt,pump_flow_prev,pump_flow_D_prev,pump_flow_ctrl_sign,pump_min_flow_duty_cycle,pump_flow_P_fact,pump_flow_I_fact,pump_flow_D_fact)
+      EndIf
+    Else
+      pump_flow_duty_cycle = 0
+    EndIf
+
+    PWM (pump_flow_duty_cycle,7,50,uSec) 'Control power to the sample pump.
+    '*** End of sample pump module flow control ***
+
+
+    '*** Beginning of valve module flow control ***
+    If ( site >= Zero_all ) Then
+      valve_ctrl_press = sonic_irga_raw(13)-valve_diff_press_offset 'The EC155 differential pressure is sonic_irga_raw(13).
+      Select Case valve_ctrl_press
+      Case Is < -7
+        valve_flow = -18.1
+      Case -7 To 0
+        valve_flow = -20*LOG10 (1-valve_ctrl_press)
+      Case 0 To 7
+        valve_flow = 20*LOG10 (1+valve_ctrl_press)
+      Case Is > 7
+        valve_flow = 18.1
+      EndSelect
+
+      If ( (site <> Span_H2O) AND (valve_flow <> NAN) ) Then
+        If ( buff_depth < 2 ) Then 
+          Call pid_cnrl (valve_flow_duty_cycle,valve_flow,valve_flow_set_pt,valve_flow_prev,valve_flow_D_prev,valve_flow_ctrl_sign,valve_min_flow_duty_cycle,valve_flow_P_fact,valve_flow_I_fact,valve_flow_D_fact)
+        EndIf
+      Else
+        valve_flow_duty_cycle = 1
+      EndIf
+    Else
+      valve_flow = 0
+      valve_flow_duty_cycle = 0
+    EndIf
+
+    PWM (valve_flow_duty_cycle,5,200,uSec) 'Control needle valve.
+    '*** End of valve module flow control ***
+
+
+
+    'Set the Manifold per the TimedControl () instruction timing.
+    SDMCD16Mask (set_valve,&b0000010000111111,2)
+
+    'System temperature control.
+    SDMCD16Mask (system_tmpr_ctrl,&b1111101111000000,2)
+
+
+    buff_depth = Status.BuffDepth(1,1)
+  NextScan
+
+
+SlowSequence
+
+  Scan (1,Sec,3,0)
+    'Measure battery voltage.
+    Battery (batt_volt)
+
+    '*** Beginning of sample intake heater control ***
+    'Measure lws.
+    BrHalf (lws,1,mV5000C,6,Vx1,1,3000,FALSE,10000,250,3000,0)
+
+    Select Case lws
+    Case Is = NAN
+      intake_heater_volts = INTAKE_HEATER_VOLTS_MAX
+      intake_heater_power = intake_heater_volts*intake_heater_volts/30
+      intake_heater = 1
+    Case Is < INTAKE_HEATER_LWS_MIN
+      intake_heater_volts = -1
+      intake_heater_power = 0
+      intake_heater = 0
+    Case INTAKE_HEATER_LWS_MIN To INTAKE_HEATER_LWS_MAX
+      intake_heater_volts = SQR((lws*INTAKE_HEATER_SLOPE+INTAKE_HEATER_OFFSET)*30)
+      intake_heater_power = intake_heater_volts*intake_heater_volts/30
+      intake_heater = intake_heater_volts*intake_heater_volts/INTAKE_HEATER_VOLTS_MAX/INTAKE_HEATER_VOLTS_MAX
+    Case Else
+      intake_heater_volts = INTAKE_HEATER_VOLTS_MAX
+      intake_heater_power = intake_heater_volts*intake_heater_volts/30
+      intake_heater = 1
+    EndSelect
+    '*** End of sample intake heater control ***
+
+
+    '*** Beginning of sample pump module temperature control ***
+    VoltSe (pump_tmpr,1,mV5000,2,TRUE,450,250,1,0)
+    pump_tmpr = LOG (249000*(5000-pump_tmpr)/pump_tmpr)
+    pump_tmpr = (1/(8.271111e-4+pump_tmpr*(2.088020e-4+8.059200e-8*pump_tmpr*pump_tmpr)))-273.15
+
+    'Pump module temperature control.
+    Select Case pump_tmpr
+    Case Is < PUMP_TMPR_CTRL_SET_PT_LOW
+      system_tmpr_ctrl = (system_tmpr_ctrl AND &hFCFF) OR &h0100 'Turn pump module heater on.
+    Case PUMP_TMPR_CTRL_SET_PT_LOW To PUMP_TMPR_CTRL_SET_PT_HIGH-PUMP_TMPR_CTRL_DEAD_BAND_WIDTH
+      system_tmpr_ctrl = system_tmpr_ctrl AND &hFCFF 'Turn pump module heater and pump fan off.
+    Case Is > PUMP_TMPR_CTRL_SET_PT_HIGH
+      system_tmpr_ctrl = (system_tmpr_ctrl AND &hFCFF) OR &h0200 'Turn pump module fan on.
+    EndSelect
+
+    'Pump module power control based on pump module temperature.
+    Select Case pump_tmpr
+    Case Is < PUMP_PWR_TMPR_SET_PT_LOW
+      mode = Sample_pump_off 'Turn off the sample pump using Mode control.
+      pump_off_f = TRUE
+    Case PUMP_PWR_TMPR_SET_PT_LOW To PUMP_PWR_TMPR_SET_PT_HIGH-PUMP_PWR_TMPR_DEAD_BAND_WIDTH
+      If ( pump_off_f ) Then
+        mode = sys_conf_var(8) 'Turn on the sample pump using Mode control.
+        pump_off_f = FALSE
+      EndIf
+    Case Is > PUMP_PWR_TMPR_SET_PT_HIGH
+      mode = Sample_pump_off 'Turn off the sample pump using Mode control.
+      pump_off_f = TRUE
+    EndSelect
+
+    pump_heater_f = system_tmpr_ctrl AND &h0100
+    pump_fan_f = system_tmpr_ctrl AND &h0200
+    pump_heater = ABS (pump_heater_f)
+    pump_fan = ABS (pump_fan_f)
+    '*** End of sample pump module temperature control ***
+
+
+    '*** Beginning of valve module temperature control ***
+    VoltSe (valve_tmpr,1,mV5000,5,TRUE,450,250,1,0)
+    valve_tmpr = LOG (249000*(5000-valve_tmpr)/valve_tmpr)
+    valve_tmpr = (1/(8.271111e-4+valve_tmpr*(2.088020e-4+8.059200e-8*valve_tmpr*valve_tmpr)))-273.15
+
+    'Cancel and reset automatic zero and span cycle if the valves are outside their operating temperature range.
+    valve_tmpr_not_okay_f = ( (valve_tmpr < VALVE_TMPR_SET_PT_LOW) OR (VALVE_TMPR_SET_PT_HIGH < valve_tmpr) )
+    If ( (mode = EC_on_auto_zro_spn) AND (index = 10) AND (SECONDS_ON_SITE_1-sec_on_site < 1) AND valve_tmpr_not_okay_f ) Then
+      TimedControl (MAXIMUM_SITES_IN_SEQUENCE,CYCLE_TIME,Sec,SITE_1,index,set_valve,1)
+    EndIf
+
+    valve_auto_tmpr_ctrl_f = ( ((mode = EC_on_auto_zro_spn) AND (index = 10) AND (SECONDS_ON_SITE_1-sec_on_site < VALVE_AUTO_WARM_UP_SECONDS)) OR ((mode = EC_on_auto_zro_spn) AND (site > 1) AND (site < 8)) )
+    If ( valve_manual_tmpr_ctrl_f OR valve_auto_tmpr_ctrl_f ) Then
+      Select Case valve_tmpr
+      Case Is < VALVE_TMPR_SET_PT_LOW
+        system_tmpr_ctrl = (system_tmpr_ctrl AND &hFF3F) OR &h0040 'Turn valve module heater on.
+      Case VALVE_TMPR_SET_PT_LOW To VALVE_TMPR_SET_PT_HIGH-VALVE_TMPR_DEAD_BAND_WIDTH
+        system_tmpr_ctrl = system_tmpr_ctrl AND &hFF3F 'Turn valve module heater and valve fan off.
+      Case Is > VALVE_TMPR_SET_PT_HIGH
+        system_tmpr_ctrl = (system_tmpr_ctrl AND &hFF3F) OR &h0080 'Turn valve module fan on.
+      EndSelect
+    Else
+      system_tmpr_ctrl = system_tmpr_ctrl AND &hFF3F 'Turn valve module heater and valve fan off.
+    EndIf
+
+    valve_heater_f = system_tmpr_ctrl AND &h0040
+    valve_fan_f = system_tmpr_ctrl AND &h0080
+    valve_heater = ABS (valve_heater_f)
+    valve_fan = ABS (valve_fan_f)
+    '*** End of valve module temperature control ***
+
+    'Save a new zero offset after a automatic field zero.
+    If ( zero_cal_prfrmd AND (site = 1) ) Then
+      zero_cal_prfrmd = FALSE
+
+      If ( zero_valve_flow < 0.9*valve_flow_set_pt )
+        Move (CO2_zero,2,NAN,1)
+        Move (zero_CO2_sig_strgth,2,NAN,1)
+      EndIf
+
+      call_onlincal_f = TRUE
+    EndIf
+
+
+    'Compute a new CO2 gain after a automatic field CO2 span.
+    If ( CO2_cal_prfrmd AND (site = 1) ) Then
+      CO2_cal_prfrmd = FALSE
+
+      If ( CO2_1_span_valve_flow < 0.9*valve_flow_set_pt )
+        CO2_1_span = NAN
+        CO2_1_CO2_sig_strgth = NAN
+      EndIf
+
+      CO2_gain = CO2_span_gas/(CO2_1_span-CO2_zero) 'Compute new CO2 gain.
+      call_onlincal_f = TRUE
+    EndIf
+
+
+    'Compute a new H2O gain after automatic field H2O span.
+    If ( H2O_cal_prfrmd AND (site = 1) ) Then
+      H2O_cal_prfrmd = FALSE
+
+      If ( CO2_1_span_valve_flow < 0.9*valve_flow_set_pt )
+        CO2_1_span = NAN
+        CO2_1_CO2_sig_strgth = NAN
+      EndIf
+
+      H2O_gain = H2O_span_gas/(H2O_span-H2O_zero) 'Compute new H2O gain.
+      call_onlincal_f = TRUE
+    EndIf
+
+
+    'Update field calibration data table after any automatic field zero and span.
+    If ( call_onlincal_f ) Then
+      call_onlincal_f = FALSE
+      CallTable onlincal
+    EndIf
+
+
+    'Update CPU configuration file if sonic azimuth has changed.
+    If ( sonic_azimuth_prev <> sonic_azimuth ) Then
+      sonic_azimuth_prev = sonic_azimuth
+      sys_conf_var(1) = sonic_azimuth
+      Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",0)
+    EndIf
+
+
+    'Update system variable file if CO2 span gas concentration has changed.
+    If ( CO2_span_gas_prev <> CO2_span_gas ) Then
+      CO2_span_gas_prev = CO2_span_gas
+      sys_conf_var(2) = CO2_span_gas
+      Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",0)
+    EndIf
+
+
+    'Update system variable file if H2O span dew point temperature has changed.
+    If ( Td_span_gas_prev <> Td_span_gas ) Then
+      Td_span_gas_prev = Td_span_gas
+      sys_conf_var(3) = Td_span_gas
+      Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",0)
+    EndIf
+
+
+    'Update system variable file if tube_dly has changed.
+    If ( tube_dly_prev <> tube_dly ) Then
+      Select Case tube_dly
+      Case Is < 0
+        tube_dly = 0
+      Case Is >= OFFSET-DELAY_EC155
+        tube_dly = OFFSET-DELAY_EC155-1
+      EndSelect
+      cp_rec_bck = OFFSET-DELAY_EC155-tube_dly
+      tube_dly_prev = tube_dly
+      sys_conf_var(4) = tube_dly
+      Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",0)
+    EndIf
+
+
+    'Update system variable file if pump module flow set point has changed.
+    If ( pump_flow_set_pt_prev <> pump_flow_set_pt ) Then
+      pump_flow_set_pt_prev = pump_flow_set_pt
+      sys_conf_var(5) = pump_flow_set_pt
+      Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",0)
+    EndIf
+
+
+    'Update system variable file if valve module flow set point has changed.
+    If ( valve_flow_set_pt_prev <> valve_flow_set_pt ) Then
+      valve_flow_set_pt_prev = valve_flow_set_pt
+      sys_conf_var(6) = valve_flow_set_pt
+      Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",0)
+    EndIf
+
+
+    'Update system variable file if the mode changed to either EC_on_auto_zro_spn or EC_off_auto_zro_spn.
+    If ( ((mode = EC_on_auto_zro_spn) AND (sys_conf_var(8) <> mode)) OR ((mode = EC_off_auto_zro_spn) AND (sys_conf_var(8) <> mode)) ) Then
+      sys_conf_var(8) = mode
+      Calfile (sys_conf_var(1),8,"CPU:sys_conf_var.dat",0) 'Store the new data to the filed.
+    EndIf
+
+
+    slowsequence_finished_f = TRUE
+  NextScan
+EndProg

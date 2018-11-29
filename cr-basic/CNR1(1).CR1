@@ -1,0 +1,132 @@
+'CR1000
+'Created by Short Cut (2.8)
+
+'Declare Variables and Units
+Public BattV
+Public CM3Up
+Public CM3Dn
+Public CG3Up
+Public CG3Dn
+Public CNR1TC
+Public CNR1TK
+Public NetRs
+Public NetRl
+Public Albedo
+Public UpTot
+Public DnTot
+Public NetTot
+Public CG3UpCo
+Public CG3DnCo
+Public NetSW
+Public NetLW
+Public NetRad
+Public SlrW
+Public SlrMJ
+
+Units BattV=Volts
+Units CM3Up=W/m^2
+Units CM3Dn=W/m^2
+Units CG3Up=W/m^2
+Units CG3Dn=W/m^2
+Units CNR1TC=Deg C
+Units CNR1TK=K
+Units NetRs=W/m^2
+Units NetRl=W/m^2
+Units Albedo=W/m^2
+Units UpTot=W/m^2
+Units DnTot=W/m^2
+Units NetTot=W/m^2
+Units CG3UpCo=W/m^2
+Units CG3DnCo=W/m^2
+Units NetSW=W/m^2
+Units NetLW=W/m^2
+Units NetRad=W/m^2
+Units SlrW=W/m^2
+Units SlrMJ=MJ/m^2
+
+'Define Data Tables
+DataTable(Table1,True,-1)
+	DataInterval(0,5,Min,10)
+	Average(1,BattV,FP2,False)
+	Average(1,CM3Up,FP2,False)
+	Average(1,CM3Dn,FP2,False)
+	Average(1,CG3Up,FP2,False)
+	Average(1,CG3Dn,FP2,False)
+	Average(1,CNR1TC,FP2,False)
+	Average(1,CNR1TK,FP2,False)
+	Average(1,NetRs,FP2,False)
+	Average(1,NetRl,FP2,False)
+	Average(1,Albedo,FP2,False)
+	Average(1,UpTot,FP2,False)
+	Average(1,DnTot,FP2,False)
+	Average(1,NetTot,FP2,False)
+	Average(1,CG3UpCo,FP2,False)
+	Average(1,CG3DnCo,FP2,False)
+	Average(1,NetSW,FP2,False)
+	Average(1,NetLW,FP2,False)
+	Average(1,NetRad,FP2,False)
+	Average(1,SlrW,FP2,False)
+	Totalize(1,SlrMJ,IEEE4,False)
+EndTable
+
+DataTable(Table2,True,-1)
+	DataInterval(0,30,Min,10)
+	Minimum(1,BattV,FP2,False,False)
+	Average(1,BattV,FP2,False)
+	Average(1,CM3Up,FP2,False)
+	Average(1,CM3Dn,FP2,False)
+	Average(1,CG3Up,FP2,False)
+	Average(1,CG3Dn,FP2,False)
+	Average(1,CNR1TC,FP2,False)
+	Average(1,CNR1TK,FP2,False)
+	Average(1,NetRs,FP2,False)
+	Average(1,NetRl,FP2,False)
+	Average(1,Albedo,FP2,False)
+	Average(1,UpTot,FP2,False)
+	Average(1,DnTot,FP2,False)
+	Average(1,NetTot,FP2,False)
+	Average(1,CG3UpCo,FP2,False)
+	Average(1,CG3DnCo,FP2,False)
+	Average(1,NetSW,FP2,False)
+	Average(1,NetLW,FP2,False)
+	Average(1,NetRad,FP2,False)
+	Average(1,SlrW,FP2,False)
+	Totalize(1,SlrMJ,IEEE4,False)
+EndTable
+
+'Main Program
+BeginProg
+	Scan(5,Sec,1,0)
+		'Default Datalogger Battery Voltage measurement BattV
+		Battery(BattV)
+		'CNR1 Net Radiometer measurements CM3Up, CM3Dn, CG3Up, CG3Dn, CNR1TC, CNR1TK,
+		'NetRs, NetRl, Albedo, UpTot, DnTot, NetTot, CG3UpCo, and CG3DnCo
+		VoltDiff(CM3Up,1,mV25,1,True,0,_60Hz,93.37,0)
+		VoltDiff(CM3Dn,1,mV25,2,True,0,_60Hz,93.37,0)
+		VoltDiff(CG3Up,1,mV7_5,3,True,0,_60Hz,93.37,0)
+		VoltDiff(CG3Dn,1,mV7_5,4,True,0,_60Hz,93.37,0)
+		BrHalf4W(CNR1TC,1,mV25,mV25,5,1,1,2100,True,True,0,_60Hz,1,0)
+		PRT(CNR1TC,1,CNR1TC,1,0)
+		CNR1TK=CNR1TC+273.18
+		NetRs=CM3Up-CM3Dn
+		NetRl=CG3Up-CG3Dn
+		Albedo=CM3Dn/CM3Up
+		UpTot=CM3Up+CG3Up
+		DnTot=CM3Dn+CG3Dn
+		NetTot=UpTot-DnTot
+		CG3UpCo=CG3Up+5.67*10^-8*CNR1TK^4
+		CG3DnCo=CG3Dn+5.67*10^-8*CNR1TK^4
+		'CNR2 Net Radiometer measurements NetSW, NetLW, and 
+		VoltSe(NetSW,1,mV25,13,True,0,_60Hz,66.31,0)
+		VoltSe(NetLW,1,mV25,14,True,0,_60Hz,82.92,0)
+		NetRad=NetSW+NetLW
+		'LI200X Pyranometer measurements SlrMJ and SlrW
+		VoltDiff(SlrW,1,mV7_5,8,True,0,_60Hz,1,0)
+		If SlrW<0 Then SlrW=0
+		SlrMJ=SlrW*0.001
+		SlrW=SlrW*200
+		'Call Data Tables and Store Data
+		CallTable(Table1)
+		CallTable(Table2)
+	NextScan
+EndProg

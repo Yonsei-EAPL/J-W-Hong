@@ -1,0 +1,2817 @@
+'CRBasic program for CPEC200 CO2/H2O Closed-Path Eddy Covariance System
+'  Campbell Scientific part number 27622
+'  Cpec200_v2_0.cr3
+'  28 June 2013
+
+'CR3000 Series Datalogger
+'Copyright (c) 2013 Campbell Scientific, Inc. All rights reserved.
+
+
+
+
+'******************* Begin Configuration Constants **************************
+
+Const VALVE_MODULE = false
+' True to enable the CPEC200 Valve Module
+' False to reduce clutter in Public table and output tables
+' Default: True
+
+Const SCRUB_MODULE = false
+' True to enable the CPEC200 Scrub Module
+' False to reduce clutter in Public table and output tables
+' Default: False
+
+Const SaveAll_diagnostics = false
+' True to save all diagnostic data in ts_data outptut table
+' False to reduce clutter in output tables
+' Default: False
+
+Const Leaf_Wetness_Sensor = false
+' True to use the leaf wetness sensor to control the EC155 intake heater power
+' False to use full power all the time
+' Default: False
+
+'**************** End Configuration Constants ******************************
+
+PipeLineMode
+
+
+'General program constants
+Const SCAN_INTERVAL = 50                 'EC sample interval (msec) (default = 100 for measurement rate = 10 Hz)
+Const SCANS_PER_SEC = 1000/SCAN_INTERVAL  '...MUST CHOOSE SCAN_INTERVAL SUCH THAT THIS IS AN INTEGER...
+Const SCAN_BUFFER_SIZE = 60*SCANS_PER_SEC '60 second pipeline scan buffer
+Const SLOW_INTERVAL = 1                   'slow scan interval (sec) (default = 2)
+Const SCANS_PER_SLOW_INTERVAL = SLOW_INTERVAL * SCANS_PER_SEC 'Number of main scans per slow scan
+
+Const LagBufferScans = 2*SCANS_PER_SEC    'size of buffers used to lag data for online flux calculations (default = 2)
+
+Const SDM_PER = 30                        'SDM clock speed (default = 30)
+Const EC100_SDM_ADDR = 1                  'SDM address for EC100 (default = 1)
+
+Const OUTPUT_INTERVAL = 30                'Flux table output interval in minutes (default = 30)
+Const OUTPUT_INTERVAL_SEC = OUTPUT_INTERVAL*60
+Const NUM_DAY_CPU = 10                     'Number of days of flux data to store on the CPU (default = 10)
+Const NUM_DAY_CRD = 200                    'Number of days of flux data to store on the CRD (default = 200)
+Const FLUX_SIZE_CPU = Ceiling (NUM_DAY_CPU*1440/OUTPUT_INTERVAL)  'Size of flux data table on CPU (records)
+Const FLUX_SIZE_CRD = Ceiling (NUM_DAY_CRD*1440/OUTPUT_INTERVAL)  'Size of flux data table on CRD (records).
+
+Const mask_timed_control = &b0000010000111111 'bits to be set by TimedControl() to control valves (and scrub pump)
+Const mask_manual_control = NOT mask_timed_control 'bits for other controls: heaters, fans, etc.
+
+'physical constants for flux calculations
+Const CP = 1004.67    'Heat capacity of air [J/(kg K)].
+Const R = 8.3143e-3   'Universal gas constant [kPa m^3/(K mol)].
+Const RD = R/29       'Gas constant for dry air [kPa m^3/(K g)].
+Const LV = 2440       'Latent heat of vaporization [J/g].
+Const RV = R/18       'Gas constant for water vapor [kPa m^3/(K g)].
+
+'variables to trigger events based on time
+Dim sec_since_midnight As Long
+Dim sec_since_message As Long
+Dim output_MODtime As Long
+Dim cal_interval_sec As Long
+Dim cal_timeoffset_sec As Long
+Dim cal_MODtime As Long
+Const config_timeoffset_sec = 15*60 'write config_history each day, 15 min past midnight
+Dim config_done_today As Boolean    'to ensure we output config_history just once/day
+
+'text strings to display status in Public table and in custom menu
+Public latest_note  As String * 100
+Public mode_status  As String * 32
+Public cpec_status  As String * 52
+Public irga_status  As String * 72
+Public sonic_status As String * 72
+Public pump_status  As String * 60
+Public valve_status As String * 92
+
+'sds: for testing issues dealing with buff_depth
+'Public delay_g = 100
+'Public delay_n = 0
+'Public delay_calc
+
+'Boolean status variables
+Public EC_mode As Boolean
+Public diag_cpec As Long
+Public irga_OK As Boolean
+Public sonic_OK As Boolean
+Public pump_flow_OK As Boolean
+
+Dim EC_mode_prev As Boolean      'used to trigger output tables and to sort pump and valve ON at the same time
+Dim diag_cpec_tmp As Long        'temporary variable to do the calculations
+Const EC_diag_mask = &b111111000 'bit masks for diag_cpec - we care about some diag bits depending on EC_mode
+Const Not_EC_diag_mask = &b110001111
+
+Const signal_min = 0.8  'lower limit for CO2 and H2O signals
+Dim i As Long
+Dim j As Long
+Dim ControlBits As Long 'bits for SDM-CD16S to control heaters and fans
+Dim Bit(32)As Long      'numeric values of binary bits
+Dim ONE As Long = 1
+
+
+'sonic and irga data (raw - not lagged)
+Public sonic_irga_raw(15)
+Alias sonic_irga_raw(1) = Ux : Units Ux = m/s
+Alias sonic_irga_raw(2) = Uy : Units Uy = m/s
+Alias sonic_irga_raw(3) = Uz : Units Uz = m/s
+Alias sonic_irga_raw(4) = Ts : Units Ts = C
+Alias sonic_irga_raw(5) = diag_sonic
+Alias sonic_irga_raw(6) = CO2 : Units CO2 = umol/mol
+Alias sonic_irga_raw(7) = H2O : Units H2O = mmol/mol
+Alias sonic_irga_raw(8) = diag_irga
+Alias sonic_irga_raw(9) = cell_tmpr : Units cell_tmpr = C
+Alias sonic_irga_raw(10) = cell_press : Units cell_press = kPa
+Alias sonic_irga_raw(11) = CO2_signal
+Alias sonic_irga_raw(12) = H2O_signal
+Alias sonic_irga_raw(13) = diff_press : Units diff_press = kPa
+Alias sonic_irga_raw(14) = source_tmpr : Units source_tmpr = C
+Alias sonic_irga_raw(15) = not_used 'this is detector tmpr for EC150, but is not used for EC155
+
+'lag time variables
+Dim dly_data_tmp(10)         'Array used to temporarily store the lagged record.
+Dim delay_EC100_msec         'EC100 processing lag (msec)... depends on bandwidth setting.
+Const TUBE_VOLUME = 0.0017 + 0.0033 + 0.0059/2.0 'volume of rain diverter, intake tube, and half of the sample cell (liters).
+Dim delay_tube_msec          ' physical travel time from inlet to center of sample cell (milliseconds)
+Dim irga_RecsBack As Long    'number of records back to get lagged irga data
+Dim sonic_RecsBack As Long   'ditto, sonic data
+Dim pump_RecsBack As Long    'ditto, pump data
+
+'variables for flux calculations
+Dim cov_array(4,4)                          'input data for the covariance instructions
+Dim Tc_L             :Units Tc_L = C        'sonic temperature, corrected for humidity, and lagged
+Dim Hs               :Units Hs = W/m^2      'sensible heat flux from sonic temperature Ts
+Dim Hc               :Units Hc = W/m^2      'sensible heat flux from corrected sonic temperature Tc
+Dim Fc               :Units Fc = mg/(m^2 s) 'CO2 flux
+Dim LE               :Units LE = W/m^2      'latent heat flux
+Dim tau              :Units tau = kg/(m s^2)'momentum flux
+Dim u_star           :Units u_star = m/s
+
+Dim wind_dir_compass :Units wind_dir_compass = degrees
+Dim amb_press_mean   :Units amb_press_mean = kPa
+Dim rho_d_mean                             'density of dry air
+Dim rho_v_mean                             'density of water vapor
+Dim rho_a_mean :Units rho_a_mean = kg/m^3  'density of humid air
+
+'variables for calculating dewpoint temperatures for realtime display
+Const CALCULATE_Td = true 'set this to false to disable dewpoint calculations (saves ~1 ms processing time)
+Dim H2O_avgrun, cell_press_avgrun, diff_press_avgrun 'for running average calculations in main scan
+Public Td_cell      : Units Td_cell = C              'dew point temperature in sample cell
+Public Td_ambient   : Units Td_ambient = C           'dew point temperature at ambient pressure
+
+'dewpoint temperatures for flux output table
+Dim Td_cell_mean    : Units Td_cell_mean = C    'dew point temperature of air in sample cell
+Dim Td_ambient_mean : Units Td_ambient_mean = C 'dew point temperature at ambient pressure
+
+Dim Tc_Kelvin  'Tc converted to absolute temperature, in Kelvin
+Dim factor_CO2 'Converts flux data from molar mixing ratio to mass density [g mol/(mmol m^3)].
+Dim factor_H2O 'Converts flux data from molar mixing ratio to mass density [g mol/(mmol m^3)].
+
+
+'------------------------- Pump speed control ------------------------------
+Public pump_ON As Boolean = TRUE 'Manual control for turning pump ON/OFF
+Dim pump_ON_prev As Boolean = true 'so we can write a message if the user changes it
+Public pump_flow  : Units pump_flow = l/min
+Public pump_control = 0.0  'pump speed control command. Can be from 0 to 1, where 0=off, 1=full speed.
+Public pump_press : Units pump_press = kPa
+Dim pump_speed    : Units pump_speed = Hz  'measured on the pump's tachometer
+
+Const PID_MaxBuffs = 11 'limit for buff_depth_OK diagnostic, and for pump, valve, do_zero, do_co2_span
+
+'variables and constants that are used in sub PID_control()
+Dim pump_flow_prev
+Dim pump_deriv_prev
+Const pump_P = 0.015
+Const pump_I = 0.02
+Const pump_D = 0.0
+Const pump_sign = -1.0
+Const pump_min = 0.0
+Const pump_max = 1.0
+
+
+'------------------------ Pump temperature control ----------------------------
+
+Public pump_tmpr : Units pump_tmpr = C 'temperature of the air inside the pump module
+Dim pump_tmpr_volts  'temprorary variable used to calculate pump_tmpr
+
+'variables to disable the pump if it is too warm or too cold
+Const PumpOKMinTemp = 0.0      'disable pump if below this temperature
+Const PumpOKMaxTemp = 55.0     'disable pump if above this temperature
+Public pump_tmpr_OK As Boolean 'true if pump temperature is within operating limits
+
+'pump heater control
+Const PumpHeatSetPt = 2.0      'turn pump heater ON if below this temperature
+Public pump_heat_ON As Boolean
+
+'pump fan control
+Const PumpFanSetPt = 50.0      'turn pump fan ON if above this temperature
+Const PumpFanDeadBand = 5.0    'turn pump fan OFF if this far below PumpFanSetPt
+Public pump_fan_ON As Boolean
+
+
+'----------------------- valve stuff ---------------------------------
+'some valve control stuff is defined even if there is no valve module (to keep the program less complicated):
+Dim NewStep As Boolean         'True for one scan when we switch to a new step in the zero/span sequence
+Dim end_omit As Boolean        'True if we have waited long enough after a valve switch to include data in averages
+Dim end_omit_prev As Boolean   'value of end_omit from previous scan (to avoid output if we have no samples)
+
+#If VALVE_MODULE Then
+'Variables and constants used by the TimedControl() instruction
+Const SEQUENCE_LENGTH = 11 'the number of steps in the zero/span sequence
+Dim Tmd_Ctl(SEQUENCE_LENGTH,2) As Long  'array used by TimedControl. Col 1 is bit pattern, col 2 is duration
+Const TC_bits   = 1 'array index used in Tmd_Ctl() to designate col 1, which holds the bit pattern for the SDM-CD16S
+Const TC_counts = 2 'array index used in Tmd_Ctl() to designate col 2, which holds the duration (number of scans)
+
+Public STARTsequence As Boolean  'User may set this to manually initiate a zero/span sequence
+
+'define constants for the valve numbers (used for keyboard display)
+Const None     = 0  'turn all valves off
+Const ZeroAir  = 1
+Const CO2span1 = 2
+Const CO2span2 = 3
+Const CO2span3 = 4
+Const CO2span4 = 5
+Const H2Ospan  = 6
+
+Dim SequenceStepText(SEQUENCE_LENGTH) As String * 24 'used in mode_status if valves are active
+
+'counters and indices related to valve switching
+Dim SequenceStep As Long      'returned from TimedControl() to indicate where we are in the sequence
+Dim SequenceStep_prev As Long 'value of SequenceStep from previous scan
+Dim SequenceStep_out As Long  'value of SequenceStep to be output in tables
+
+Public valve_number As Long   'User can change this in Manual mode - Otherwise controlled by automatic sequence
+Dim valve_out As Long         'value of valve_number to be output in tables
+
+Dim smpl_counter As Long      'number of scans on this step of the zero/span sequence
+Dim OmitCounts As Long        'working copy of the omit counts for this step in the sequence
+
+'this call to TimedControl sets the behavior if the clock is reset: the sequence will restart
+'TimedControl(SIZE,sync_interval,interval_units,default_value,index,array,SyncOpt)
+TimedControl(1,0,msec,1,SequenceStep,Tmd_Ctl(),1)
+
+'define the mode for controlling the valves
+Dim valve_mode As Long 'dim, not public, so the user can't accidentally change it
+'valve_mode takes one of the values defined as constants below
+Const Manual = 0
+Const StartUp = 1
+Const CalActive = 2
+
+Public DO_P_offset As Boolean
+Public press_offset : Units press_offset = kPa 'used for calculating valve flow
+
+
+'--------------------- valve temperature control -----------------------
+Public valveTctl_ON As Boolean  'enables temperature control of valve module (and scrub module)
+Const valve_warmup_time = 25    'turn temperature control on this much early
+Public valve_tmpr : Units valve_tmpr = C 'temperature of valve manifold
+Dim valve_tmpr_volts
+
+Const ValveOKMinTemp = 0.0     'disable valves if below this temperature
+Const ValveOKMaxTemp = 60.0    'disable valves if above this temperature
+Public valve_tmprOK As Boolean    'true if valve temperature is within operating limits
+
+'valve heater control
+Const ValveHeatSetPt = 2.0     'turn valve heater ON if below this temperature
+Public valveHeat_ON As Boolean
+
+'valve fan control
+Const ValveFanSetPt = 50.0     'turn valve fan ON if above this temperature
+Const ValveFanDeadBand = 2.0   'turn valve fan OFF if this far below ValveFanSetPt
+Public valveFan_ON As Boolean
+
+'----------------------- Valve flow control -----------------------------
+Dim press_offset_avgrun        'to calculate press_offset
+Dim AvgRun_counter As Long     'to calculate press_offset
+Dim valve_press                'to calculate valve_flow
+Public valve_flow : Units valve_flow = l/min
+Public valve_flow_OK As Boolean
+
+'constants and variables that are used in sub PID_control()
+Public valveControl 'how hard to drive the proprotional flow control valve. 0 = off; 1 = wide open.
+Dim valve_flow_prev
+Dim valve_D_prev
+Const valve_P = 0.01
+Const valve_I = 0.003
+Const valve_D = 0.0
+Const valve_sign = -1.0
+Const valve_min = 0.2
+Const valve_max = 1.0
+
+
+#If SCRUB_MODULE Then
+'------------------------Scrub module temperature control -----------------------------
+
+Public scrub_tmpr : Units scrub_tmpr = C 'temperature of scrub module
+Dim scrub_tmpr_volts
+
+'variables to disable the scrub module if it is too warm or too cold
+Const ScrubOKMinTemp = 5.0     'disable scrub module if below this temperature
+Const ScrubOKMaxTemp = 50.0    'disable scrub module if above this temperature
+Public scrub_tmprOK As Boolean    'true if scrub temperature is within operating limits
+
+'scrub heater control
+Const ScrubHeatSetPt = 7.0     'turn scrub heater ON if below this temperature
+Public scrubHeat_ON As Boolean
+
+'scrub fan control
+Const ScrubFanSetPt = 45.0     'turn scrub fan ON if above this temperature
+Const ScrubFanDeadBand = 5.0   'turn scrub fan OFF if this far below scrubFanSetPt
+Public scrubFan_ON As Boolean
+
+Public scrub_press : Units scrub_press = kPa 'pressure at outlet of scrub pump
+
+#EndIf 'end of #if SCRUB_MODULE
+
+
+Public DO_zero As Boolean        'command the irga to do a CO2 and H2O zero
+Public DO_CO2_span As Boolean    'command the irga to do a CO2 span
+Public H2OSpanDewPt : Units H2OSpanDewPt = C 'Dew point temperature setting on the dew point generator
+Public DO_H2O_span As Boolean    'command the irga to do an H2O span
+
+#EndIf 'end of #if VALVE_MODULE
+
+
+Public BattVolt : Units BattVolt = V
+Public BattVolt_OK As Boolean    'public to allow user to reset it if the voltage is in the deadband
+Public panel_tmpr : Units panel_tmpr = C
+Public process_time As Long : Units process_time = us 'process time from status table
+Public buff_depth As Long        'pipeline buffer depth from status table
+Public buff_depth_OK As Boolean
+
+
+'------------------------- EC155 intake heater control---------------------------
+Const INTAKE_HEATER_MAX = 4.5375
+Public intake_heater  :Units intake_heater = V
+Dim intake_heater_prev
+Dim intake_heater_result As Long
+
+#If Leaf_Wetness_Sensor Then
+Public leaf_wetness 'measurement from leaf wetness sensor
+Const LWS_MAX = 344 'Leaf wetness to apply maximum power
+Const LWS_MIN = 323 'Leaf wetness to apply zero power
+#EndIf
+
+
+'-------------------------- energy balance sensors ------------------------------
+'declare variables for energy balance sensors here
+
+
+'-------------------------------- system configuration variables ------------------------------------------
+Const N_config_float = 12 'number of floating point configuration variables
+Public config_float(N_config_float) = {10,1,0,20,0,7,1440,59,60,30,1,400}   'DEFAULT VALUES of configuration variables
+Dim config_float_prev(N_config_float) 'copies so we can see if something changed
+Dim something_changed As Boolean
+
+Alias config_float(1) =  BATT_LOWLIMIT     :Units BATT_LOWLIMIT = V 'disable pump, valves, heaters, below this voltage
+Alias config_float(2) =  BATT_DEADBAND     :Units BATT_DEADBAND = V 'and don't turn back on until it rises this much
+Alias config_float(3) =  SONIC_AZIMUTH     :Units SONIC_AZIMUTH = degrees 'azimuth of the CSAT3A negative x-axis
+Alias config_float(4) =  BANDWIDTH         :Units BANDWIDTH = Hz       '5=5Hz, 10=10Hz, 12=12.5Hz, 20=20Hz, 25=25Hz
+'BANDWIDTH Default = 20. Set to 5 for anti-aliased spectra at 10 Hz sample rate
+Alias config_float(5) =  AMB_PRESS_NOMINAL :Units AMB_PRESS_NOMINAL = kPa 'backup for when diff P sensor is not used
+Alias config_float(6) =  PUMP_SETPT        :Units PUMP_SETPT = l/min   'setpoint for sample pump in EC mode
+Alias config_float(7) =  CAL_INTERVAL      :Units CAL_INTERVAL = min   'time between auto zero/span sequences
+Alias config_float(8) =  CAL_TIMEOFFSET    :Units CAL_TIMEOFFSET = min 'minutes to wait after midnight for first cal
+Alias config_float(9) =  ZERO_TIME         :Units ZERO_TIME = s        'time to turn the zero valve on
+Alias config_float(10) = SPAN_TIME         :Units SPAN_TIME = s        'time to turn the CO2 span valve on
+Alias config_float(11) = CAL_FLOW_SETPT    :Units CAL_FLOW_SETPT = l/min 'setpoint for zero/span flow
+Alias config_float(12) = CO2_SPAN_PPM      :Units CO2_SPAN_PPM = umol/mol 'CO2 concentration in CO2 span gas.
+
+'previous value of each float config variable
+Alias config_float_prev(1) =  BATT_LOWLIMIT_prev
+Alias config_float_prev(2) =  BATT_DEADBAND_prev
+Alias config_float_prev(3) =  SONIC_AZIMUTH_prev
+Alias config_float_prev(4) =  BANDWIDTH_prev
+Alias config_float_prev(5) =  AMB_PRESS_NOMINAL_prev
+Alias config_float_prev(6) =  PUMP_SETPT_prev
+Alias config_float_prev(7) =  CAL_INTERVAL_prev
+Alias config_float_prev(8) =  CAL_TIMEOFFSET_prev
+Alias config_float_prev(9) =  ZERO_TIME_prev
+Alias config_float_prev(10) = SPAN_TIME_prev
+Alias config_float_prev(11) = CAL_FLOW_SETPT_prev
+Alias config_float_prev(12) = CO2_SPAN_PPM_prev
+
+Const N_config_bool = 8 'number of boolean configuration variables
+Public config_bool(N_config_bool) As Boolean = {true,false,false,false,false,false,false,false} 'DEFAULT VALUES of configuration variables
+Dim config_bool_prev(N_config_bool) 'copies so we can see if something changed
+
+Alias config_bool(1) = USE_DIFF_PRESS 'TRUE = use the differential pressure sensor; FALSE = do not use
+'USE_DIFF_PRESS default = TRUE. Set to FALSE if the sample cell is plumbed directly to the EC100 barometer
+Alias config_bool(2) = CHECK_ZERO
+Alias config_bool(3) = SET_ZERO
+Alias config_bool(4) = CHECK_SPAN1
+Alias config_bool(5) = SET_SPAN_1
+Alias config_bool(6) = CHECK_SPAN2
+Alias config_bool(7) = CHECK_SPAN3
+Alias config_bool(8) = CHECK_SPAN4
+
+Alias config_bool_prev(1) = USE_DIFF_PRESS_prev
+Alias config_bool_prev(2) = CHECK_ZERO_prev
+Alias config_bool_prev(3) = SET_ZERO_prev
+Alias config_bool_prev(4) = CHECK_SPAN1_prev
+Alias config_bool_prev(5) = SET_SPAN_1_prev
+Alias config_bool_prev(6) = CHECK_SPAN2_prev
+Alias config_bool_prev(7) = CHECK_SPAN3_prev
+Alias config_bool_prev(8) = CHECK_SPAN4_prev
+
+'configuration file variables
+Dim sys_conf_var_file As Long                  'Filehandle for the system configuration file
+Dim sys_conf_var_file_size As Long             'Size of the system configuration file
+Dim sys_conf_var(N_config_float+N_config_bool) 'this will hold both floats and booleans
+
+
+' EC100 configure variables
+'Let the user set BANDWIDTH and USE_DIFF_PRESS here (because this program needs to know the setting)
+'irga power-down handled separately because it takes a long time
+'zero/span stuff handled separately
+'intake heater power handled separately
+'Accept factory settings for everything else (user can change them via ECMon or DevConfig)
+
+Dim config_array(4,2)            'for sending configuration commands to EC100Configure
+Dim power_array (1,2) = {21,0}   'special config array to power down the irga
+Dim waiting_for_save As Long = 0 'timeout counter - powering irga up/down requires ~8 s
+
+
+'----------------------------------------- Table Definitions ------------------------------------------------------
+
+'triggers for output of Flux table
+Dim cov_trigger As Boolean    'trigger covariance calculations in main scan
+Dim cov_done As Boolean       'done writing temporary COV output
+Dim cov_trigger_inhibit As Boolean
+Dim flux_trigger As Boolean   'trigger Flux table in slow scan
+Dim flux_inhibit As Boolean
+
+Dim fast_trigger As Boolean   'trigger fast averages in main scan (used for both Flux and Zero_Span output tables)
+Dim fast_done As Boolean
+Dim slow_trigger As Boolean   'trigger slow averages in slow scan (used for both Flux and Zero_Span output tables)
+Dim slow_done As Boolean
+
+Dim zsp_trigger As Boolean    'trigger for Zero_Span output table in slow scan
+
+Dim FastAvgDisable As Boolean 'disable inclusion of data in FastAverage table during omit counts, etc.
+Dim flux_disable_f As Boolean 'disable inclusion of data in COV processing if anything is bad
+
+
+'hidden table to calculate averages of variables from main (fast) scan
+DataTable(FastAverages_300m,fast_trigger,1)
+  TableHide
+  'sonic and irga data
+  Average (14,Ux,IEEE4,FastAvgDisable)'raw data from the sonic and irga
+
+  'pump data
+  Average (1,pump_ON,IEEE4,FastAvgDisable)
+  Average (1,pump_flow,IEEE4,FastAvgDisable)
+  Average (1,pump_control,IEEE4,FastAvgDisable)
+  Average (1,pump_press,IEEE4,FastAvgDisable)
+
+  'system stuff
+  Average(1,diag_cpec,IEEE4,FastAvgDisable)
+  Totalize(1,ONE,IEEE4,FastAvgDisable):FieldNames("FastSamples")
+  Maximum(1,buff_depth,IEEE4,false,0)
+  Average(1,process_time,IEEE4,false)
+
+  #If VALVE_MODULE Then
+  Sample(1,SequenceStep_out,IEEE4)
+  Sample(1,valve_out,IEEE4)
+  Sample(1,press_offset,IEEE4)
+  Average (1,valve_flow,IEEE4,FastAvgDisable)
+  Average (1,valveControl,IEEE4,FastAvgDisable)
+  #EndIf 'end of #if VALVE_MODULE
+
+EndTable 'end of table FastAverages
+
+
+'and here is the array it is read back into:
+Dim fast_avg_out(27)
+'alias these here for use in both output tables (Flux and Zero_Span)
+Alias fast_avg_out( 1) = Ux_Avg  : Units Ux_Avg = m/s
+Alias fast_avg_out( 2) = Uy_Avg  : Units Uy_Avg = m/s
+Alias fast_avg_out( 3) = Uz_Avg  : Units Uz_Avg = m/s
+Alias fast_avg_out( 4) = Ts_Avg  : Units Ts_Avg = C
+Alias fast_avg_out( 5) = diag_sonic_Avg
+Alias fast_avg_out( 6) = CO2_Avg : Units CO2_Avg = umol/mol
+Alias fast_avg_out( 7) = H2O_Avg : Units H2O_Avg = mmol/mol
+Alias fast_avg_out( 8) = diag_irga_Avg
+Alias fast_avg_out( 9) = cell_tmpr_Avg   : Units cell_tmpr_Avg = C
+Alias fast_avg_out(10) = cell_press_Avg  : Units cell_press_Avg = kPa
+Alias fast_avg_out(11) = CO2_signal_Avg
+Alias fast_avg_out(12) = H2O_signal_Avg
+Alias fast_avg_out(13) = diff_press_Avg  : Units diff_press_Avg = kPa
+Alias fast_avg_out(14) = source_tmpr_Avg : Units source_tmpr_Avg = C
+
+Alias fast_avg_out(15) = pump_ON_Avg
+Alias fast_avg_out(16) = pump_flow_Avg   : Units pump_flow_Avg = l/min
+Alias fast_avg_out(17) = pump_control_Avg
+Alias fast_avg_out(18) = pump_press_Avg  : Units pump_press_Avg = kPa
+
+Alias fast_avg_out(19) = diag_CPEC_Avg
+Alias fast_avg_out(20) = fast_samples
+Alias fast_avg_out(21) = buff_depth_Max
+Alias fast_avg_out(22) = process_time_Avg : Units process_time_Avg = usec
+
+'define valve data whether or not they are used
+'these are output in Zero_Span but not in Flux
+Alias fast_avg_out(23) = Sequence_Step
+Alias fast_avg_out(24) = ValveNumber
+Alias fast_avg_out(25) = PressOffset : Units PressOffset = kPa
+Alias fast_avg_out(26) = valve_flow_Avg : Units valve_flow_Avg = l/min
+Alias fast_avg_out(27) = valveControl_Avg
+
+
+'hidden table to calculate averages of variables from slow scan
+'no disable variable...these are always included
+DataTable(SlowAverages_300m,slow_trigger,1)
+  TableHide
+
+  'pump temperatures
+  Average (1,pump_tmpr_OK,IEEE4,false)
+  Average (1,pump_tmpr,IEEE4,false)
+  Average (1,pump_heat_ON,IEEE4,false)
+  Average (1,pump_fan_ON,IEEE4,false)
+
+  'basic system
+  Average (1,panel_tmpr,IEEE4,false)
+  Average (1,BattVolt, IEEE4,false)
+  Average (1,BattVolt_OK,IEEE4,false)
+  Totalize (1,ONE,IEEE4,false):FieldNames("SlowSamples")
+
+  #If VALVE_MODULE Then
+  Average (1,valve_tmprOK,IEEE4,false)
+  Average (1,valve_tmpr,IEEE4,false)
+  Average (1,valveHeat_ON,IEEE4,false)
+  Average (1,valveFan_ON,IEEE4,false)
+
+  #If SCRUB_MODULE Then
+  Average (1,scrub_press,IEEE4,false)
+  Average (1,scrub_tmprOK,IEEE4,false)
+  Average (1,scrub_tmpr,IEEE4,false)
+  Average (1,scrubHeat_ON,IEEE4,false)
+  Average (1,scrubFan_ON,IEEE4,false)
+  #EndIf ' end of #if SCRUB_MODULE
+
+  #EndIf 'end of #if VALVE_MODULE
+
+  'output the accessory sensors
+  #If Leaf_Wetness_Sensor Then
+  Average(1,leaf_wetness,IEEE4,false)
+  Average (1,intake_heater,IEEE4,false)'this doesn't change unless we have LWS
+  #EndIf 'end of if Leaf_Wetness_Sensor
+
+  'add energy balance sensors here
+
+EndTable 'end of table SlowAverages
+
+
+'and here is the array it is read back into:
+Dim slow_avg_out(19)
+'alias these here, so names appear in both output tables (Flux and Zero_Span)
+Alias slow_avg_out(1) = PumpTmprOK_Avg
+Alias slow_avg_out(2) = pump_tmpr_Avg : Units pump_tmpr_Avg = C
+Alias slow_avg_out(3) = pump_heat_Avg
+Alias slow_avg_out(4) = pump_fan_Avg
+Alias slow_avg_out(5) = panel_tmpr_Avg : Units panel_tmpr_Avg = C
+Alias slow_avg_out(6) = BattVolt_Avg : Units BattVolt_Avg = V
+Alias slow_avg_out(7) = BattVoltOK_Avg
+Alias slow_avg_out(8) = slow_samples
+
+'define these whether or not they are used for valve module and scrub module
+Alias slow_avg_out(9) = ValveTmprOK_Avg
+Alias slow_avg_out(10) = valve_tmpr_Avg : Units valve_tmpr_Avg = C
+Alias slow_avg_out(11) = valve_heat_Avg
+Alias slow_avg_out(12) = valve_fan_Avg
+
+Alias slow_avg_out(13) = scrub_press_Avg : Units scrub_press_Avg = kPa
+Alias slow_avg_out(14) = ScrubTmprOK_Avg
+Alias slow_avg_out(15) = scrub_tmpr_Avg : Units scrub_tmpr_Avg = C
+Alias slow_avg_out(16) = scrub_heat_Avg
+Alias slow_avg_out(17) = scrub_fan_Avg
+
+'accessory sensors
+Alias slow_avg_out(18) = leaf_wetness_Avg
+Alias slow_avg_out(19) = intake_heater_Avg : Units intake_heater_Avg = V
+
+'add energy balance sensors here
+
+
+#If VALVE_MODULE Then
+DataTable (Zero_Span_300m, true, 500)'assume 24 sequences/day * 7 steps/seq (max) * ~3 days
+  CardOut (0,33000) '~200 days
+
+  Sample(2, fast_avg_out(23),IEEE4) 'Sequence_Step and ValveNumber
+  Sample(17,fast_avg_out(6), IEEE4) 'the real data, starting with CO2
+  Sample(3, fast_avg_out(25),IEEE4) 'the last 3
+  Sample(12,slow_avg_out(1), IEEE4)
+
+  #If SCRUB_MODULE Then
+  Sample(5, slow_avg_out(13),IEEE4)
+  #EndIf 'end of #if SCRUB_MODULE
+
+EndTable 'end of table Zero_Span
+#EndIf 'end of #if VALVE_MODULE
+
+
+'hidden table to lag the sonic data
+DataTable (sonic_LagBuffer_300m,TRUE,LagBufferScans)
+  TableHide
+  Sample (4,sonic_irga_raw(1),IEEE4)
+  Sample (1,(NOT sonic_OK),IEEE4)
+EndTable
+
+
+'and here is where it is read in after being lagged
+Dim sonic_lagged(5)
+Alias sonic_lagged(1) = Ux_L : Units Ux_L = m/s
+Alias sonic_lagged(2) = Uy_L : Units Uy_L = m/s
+Alias sonic_lagged(3) = Uz_L : Units Uz_L = m/s
+Alias sonic_lagged(4) = Ts_L : Units Ts_L = C
+Alias sonic_lagged(5) = sonic_BAD_L
+
+
+'hidden table to lag the irga data
+DataTable (irga_LagBuffer_300m,TRUE,LagBufferScans)
+  TableHide
+  Sample (1,CO2,IEEE4)
+  Sample (1,H2O,IEEE4)
+  Sample (1,cell_tmpr,IEEE4)
+  Sample (1,cell_press,IEEE4)
+  Sample (1,diff_press,IEEE4)
+  Sample (1,(NOT irga_OK),IEEE4)
+EndTable
+
+
+'and here is where it is read in after being lagged
+Dim irga_lagged(6)
+Alias irga_lagged(1) = CO2_L        :Units CO2_L = umol/mol
+Alias irga_lagged(2) = H2O_L        :Units H2O_L = mmol/mol
+Alias irga_lagged(3) = cell_tmpr_L  :Units cell_tmpr_L = C
+Alias irga_lagged(4) = cell_press_L :Units cell_press_L = kPa
+Alias irga_lagged(5) = diff_press_L :Units diff_press_L = kPa
+Alias irga_lagged(6) = irga_BAD_L
+
+
+'hidden table to lag the pump data
+DataTable (pump_LagBuffer_300m,TRUE,LagBufferScans)
+  TableHide
+  Sample (1,pump_flow,IEEE4)
+  Sample (1,(NOT pump_flow_OK),IEEE4)
+EndTable
+
+
+'and here is where it is read in after being lagged
+Dim pump_lagged(2)
+Alias pump_lagged(1) = pump_flow_L :Units pump_flow_L = l/min
+Alias pump_lagged(2) = pump_flow_BAD_L
+
+
+'sds: this table is for realtime evaluation of how well we align data
+'DataTable (TS_lagged,true,1000)
+'  Sample(5,sonic_lagged,IEEE4)
+'  Sample(6,irga_lagged,IEEE4)
+'  Sample(2,pump_lagged,IEEE4)
+'EndTable
+
+
+'hidden table to compute covariances
+DataTable (comp_cov_300m,cov_trigger,1)
+  TableHide
+
+  'lagged sonic data
+  Average (4,Ux_L,IEEE4,sonic_BAD_L)'Ux, Uy, Uz, Ts
+  Totalize (1,ONE,IEEE4,sonic_BAD_L) :FieldNames("sonic_samples")
+
+  'lagged irga data
+  Average (5,CO2_L,IEEE4,irga_BAD_L) 'CO2, H2O, cell T, cell P, Diff P
+  Totalize (1,ONE,IEEE4,irga_BAD_L)  :FieldNames("irga_samples")
+
+  'lagged pump data
+  Average (1,pump_flow_L,IEEE4,pump_flow_BAD_L)
+  Totalize (1,ONE,IEEE4,(pump_flow_BAD_L)) :FieldNames("pump_samples")
+
+  'processed data
+  WindVector (1,Uy_L,Ux_L,IEEE4,sonic_BAD_L,0,1,2)'(4 values)
+  Average (1,Tc_L,IEEE4,flux_disable_f)
+  Totalize (1,ONE,IEEE4,flux_disable_f)  :FieldNames("flux_samples")
+
+  'covariances, etc.
+  Covariance (4,cov_array(1,1),IEEE4,sonic_BAD_L,10) 'sonic with itself (10 values)
+  Covariance (4,cov_array(2,1),IEEE4,flux_disable_f,4) 'CO2 with sonic
+  Covariance (4,cov_array(3,1),IEEE4,flux_disable_f,4) 'H2O with sonic
+  Covariance (4,cov_array(4,1),IEEE4,flux_disable_f,4) 'Tc with sonic
+
+EndTable 'end of table comp_cov
+
+
+'and here is where the COV results go:
+Dim cov_out(41)  'CSAT3A sonic head statistics.
+
+'sonic
+Alias cov_out( 1) = Ux_Lag_Avg         :Units Ux_Lag_Avg = m/s
+Alias cov_out( 2) = Uy_Lag_Avg         :Units Uy_Lag_Avg = m/s
+Alias cov_out( 3) = Uz_Lag_Avg         :Units Uz_Lag_Avg = m/s
+Alias cov_out( 4) = Ts_Lag_Avg         :Units Ts_Lag_Avg = C
+Alias cov_out( 5) = sonic_samples
+
+'irga
+Alias cov_out( 6) = CO2_Lag_Avg        :Units CO2_Lag_Avg = umol/mol
+Alias cov_out( 7) = H2O_Lag_Avg        :Units H2O_Lag_Avg = mmol/mol
+Alias cov_out( 8) = cell_tmpr_Lag_Avg  :Units cell_tmpr_Lag_Avg = C
+Alias cov_out( 9) = cell_press_Lag_Avg :Units cell_press_Lag_Avg = kPa
+Alias cov_out(10) = diff_press_Lag_Avg :Units diff_press_Lag_Avg = kPa
+Alias cov_out(11) = irga_samples
+
+'pump
+Alias cov_out(12) = pump_flow_Lag_Avg  :Units pump_flow_Lag_Avg = l/min
+Alias cov_out(13) = pump_OK_samples
+
+'4 values from windvector
+Alias cov_out(14) = wind_speed       :Units wind_speed = m/s 'average wind speed
+Alias cov_out(15) = wind_vector_mag  :Units wind_vector_mag = m/s 'magnitude of average wind vector
+Alias cov_out(16) = wind_dir_sonic   :Units wind_dir_sonic = degrees'direction of average wind vector
+Alias cov_out(17) = stdev_wind_dir   :Units stdev_wind_dir = degrees 'standard deviation of wind direction
+
+'more processed values
+Alias cov_out(18) = Tc_mean          :Units Tc_mean = C
+Alias cov_out(19) = flux_samples
+
+'10 values from covariance of sonic with itself
+Alias cov_out(20) = Ts_stdev        :Units Ts_stdev = C
+Alias cov_out(21) = Ts_Ux_cov       :Units Ts_Ux_cov = C m/s
+Alias cov_out(22) = Ts_Uy_cov       :Units Ts_Uy_cov = C m/s
+Alias cov_out(23) = Ts_Uz_cov       :Units Ts_Uz_cov = C m/s
+Alias cov_out(24) = Ux_stdev        :Units Ux_stdev = m/s
+Alias cov_out(25) = Ux_Uy_cov       :Units Ux_Uy_cov = (m/s)^2
+Alias cov_out(26) = Ux_Uz_cov       :Units Ux_Uz_cov = (m/s)^2
+Alias cov_out(27) = Uy_stdev        :Units Uy_stdev = m/s
+Alias cov_out(28) = Uy_Uz_cov       :Units Uy_Uz_cov = (m/s)^2
+Alias cov_out(29) = Uz_stdev        :Units Uz_stdev = m/s
+
+'3 sets of 4 values from covariance
+Alias cov_out(30) = CO2_stdev        :Units CO2_stdev = umol/mol
+Alias cov_out(31) = CO2_Ux_cov       :Units CO2_Ux_cov = (umol m)/(mol s)
+Alias cov_out(32) = CO2_Uy_cov       :Units CO2_Uy_cov = (umol m)/(mol s)
+Alias cov_out(33) = CO2_Uz_cov       :Units CO2_Uz_cov = (umol m)/(mol s)
+
+Alias cov_out(34) = H2O_stdev        :Units H2O_stdev = mmol/mol
+Alias cov_out(35) = H2O_Ux_cov       :Units H2O_Ux_cov = (mmol m)/(mol s)
+Alias cov_out(36) = H2O_Uy_cov       :Units H2O_Uy_cov = (mmol m)/(mol s)
+Alias cov_out(37) = H2O_Uz_cov       :Units H2O_Uz_cov = (mmol m)/(mol s)
+
+Alias cov_out(38) = Tc_stdev        :Units Tc_stdev = C
+Alias cov_out(39) = Tc_Ux_cov       :Units Tc_Ux_cov = C m/s
+Alias cov_out(40) = Tc_Uy_cov       :Units Tc_Uy_cov = C m/s
+Alias cov_out(41) = Tc_Uz_cov       :Units Tc_Uz_cov = C m/s
+
+
+Public CNR4(4)
+Public CNR4Mult(4)
+Public CNR4TC
+Public CNR4TK
+Public Short_R_Net
+Public Long_R_Net
+Public Albedo
+Public Total_Net_R
+Public LongUpCo
+Public LongDnCo
+
+Alias CNR4(1)=ShortUp
+Alias CNR4(2)=ShortDn
+Alias CNR4(3)=LongUp
+Alias CNR4(4)=LongDn
+Alias CNR4Mult(1)=SUpMult
+Alias CNR4Mult(2)=SDnMult
+Alias CNR4Mult(3)=LUpMult
+Alias CNR4Mult(4)=LDnMult
+
+Units CNR4TC=Deg C
+Units CNR4TK=K
+Units Short_R_Net=W/m^2
+Units Long_R_Net=W/m^2
+Units Albedo=W/m^2
+Units Total_Net_R=W/m^2
+Units LongUpCo=W/m^2
+Units LongDnCo=W/m^2
+Units ShortUp=W/m^2
+Units ShortDn=W/m^2
+Units LongUp=W/m^2
+Units LongDn=W/m^2
+
+
+'this is the actual output table for the fluxes
+DataTable (Flux_300m,TRUE,FLUX_SIZE_CPU)
+  CardOut (0,FLUX_SIZE_CRD)
+
+  'fluxes
+  Sample (1,Hs,IEEE4)
+  Sample (1,Hc,IEEE4)
+  Sample (1,LE,IEEE4)
+  Sample (1,Fc,IEEE4)
+  Sample (1,tau,IEEE4)
+  Sample (1,u_star,IEEE4)
+
+  'averages of the lagged raw data
+  Sample (5,Ux_Lag_Avg,IEEE4) 'lagged sonic averages
+  Sample (6,CO2_Lag_Avg,IEEE4) 'lagged irga means
+  Sample (2,pump_flow_Lag_Avg,IEEE4) 'lagged pump means
+
+  'calculated values
+  Sample (4,wind_speed,IEEE4) 'wind vector calculations
+  Sample (1,wind_dir_compass,IEEE4)
+  Sample (1,Tc_mean,IEEE4)
+  Sample (1,amb_press_mean,IEEE4)
+  Sample (1,rho_a_mean, IEEE4)
+  Sample (1,Td_cell_mean,IEEE4)
+  Sample (1,Td_ambient_mean,IEEE4)
+  Sample (1,flux_samples,IEEE4)
+
+  'covariances
+  Sample (10,Ts_stdev,IEEE4)  'covariances from sonic
+  Sample (12,CO2_stdev,IEEE4) 'covariances of CO2, H2O, and Tc with Uz
+
+  'averages from fast and slow scans
+  Sample(22, fast_avg_out(1),IEEE4)
+  Sample( 8, slow_avg_out(1),IEEE4)
+
+  #If VALVE_MODULE Then
+  Sample(4, slow_avg_out(9),IEEE4)
+
+  #If SCRUB_MODULE Then
+  Sample(5, slow_avg_out(13),IEEE4)
+  #EndIf 'end of #if SCRUB_MODULE
+
+  #EndIf 'end of #if VALVE_MODULE
+
+  #If Leaf_Wetness_Sensor Then
+  Sample(2, slow_avg_out(18),IEEE4)
+  #EndIf 'end of if Leaf_Wetness_Sensor
+
+  'add energy balance sensors here
+  Sample(1,ShortUp,FP2)   'net radiometer
+  Sample(1,ShortDn,FP2)
+  Sample(1,LongUp,FP2)
+  Sample(1,LongDn,FP2)
+  Sample(1,CNR4TC,FP2)
+  Sample(1,CNR4TK,FP2)
+  Sample(1,Short_R_Net,FP2)
+  Sample(1,Long_R_Net,FP2)
+  Sample(1,Albedo,FP2)
+  Sample(1,Total_Net_R,FP2)
+  Sample(1,LongUpCo,FP2)
+  Sample(1,LongDnCo,FP2)
+
+EndTable 'end of flux table
+
+
+'Time series data.
+DataTable (ts_data_300m,TRUE,-1)
+  DataInterval (0,SCAN_INTERVAL,mSec,100)
+  TableFile ("CRD:"&Status.SerialNumber(1,1)&".ts_data_300m_",64,-1,0,20,Day,0,0)
+'????
+  Sample(1,EC_mode,IEEE4)
+  Sample(1,diag_cpec,IEEE4)
+
+  Sample(5,Ux,IEEE4)'sonic data
+  Sample(5,CO2,IEEE4)'irga data
+  Sample(1,diff_press,IEEE4)
+  Sample(1,pump_flow,IEEE4)  '
+
+  #If VALVE_MODULE Then
+  Sample(1,valve_number,IEEE4)
+  Sample(1,valve_flow,IEEE4)
+  #EndIf 'VALVE_MODULE
+
+  #If SaveAll_diagnostics Then
+  Sample(1,CO2_signal,IEEE4)
+  Sample(1,H2O_signal,IEEE4)
+  Sample(1,source_tmpr,IEEE4)
+
+  Sample(1,pump_control,IEEE4)
+  Sample(1,pump_press,IEEE4)
+  Sample(1,pump_tmpr,IEEE4)
+  Sample(1,ControlBits,IEEE4)
+
+  #If VALVE_MODULE Then
+  Sample(1,SequenceStep,IEEE4)
+  Sample(1,valve_tmpr,IEEE4)
+  Sample(1,valveControl,IEEE4)
+
+  #If SCRUB_MODULE Then
+  Sample(1,scrub_press,IEEE4)
+  Sample(1,scrub_tmpr,IEEE4)
+  #EndIf 'end of #if SCRUB_MODULE
+
+  #EndIf'end of #if VALVE_MODULE
+
+  Sample(1,BattVolt,IEEE4)
+  Sample(1,process_time,IEEE4)
+  Sample(1,buff_depth,IEEE4)
+
+  #EndIf 'end of if SaveAll_diagnostics
+EndTable 'end of table ts_data
+
+
+'history of configuration variables - saved once per day and whenever we update them
+DataTable (config_history_300m,TRUE,100)
+  CardOut (0,1000)
+
+  'configuration variables
+  Sample(N_config_float,config_float,ieee4)
+  Sample(N_config_bool, config_bool ,Boolean)
+
+  'configuration constants (compile switches)
+  Sample(1, VALVE_MODULE,Boolean)       : FieldNames("VALVE_MODULE")
+  Sample(1, SCRUB_MODULE,Boolean)       : FieldNames("SCRUB_MODULE")
+  Sample(1,SaveAll_diagnostics,Boolean) : FieldNames("SaveAll_diagnostics")
+  Sample(1,Leaf_Wetness_Sensor,Boolean) : FieldNames("Leaf_Wetness_Sensor")
+
+EndTable 'end of config_history
+
+
+Dim message_str As String * 72
+Dim null_str As String * 72
+Dim one_space As String * 1
+
+DataTable (message_log_300m,TRUE,300) '4/sequence * 24 seq/day * ~3 day
+  CardOut (0,20000) '~200 days worst case
+
+  Sample(1,message_str,String)
+
+  Sample(1,mode_status,String)
+  Sample(1,cpec_status,String)
+  Sample(1,sonic_status,String)
+  Sample(1,irga_status,String)
+  Sample(1,pump_status,String)
+  Sample(1,valve_status,String)
+
+  Sample(1,panel_tmpr ,IEEE4)
+  Sample(1,BattVolt ,IEEE4)
+
+  Sample(1,Ts,IEEE4)
+  Sample(1,CO2,IEEE4)
+  Sample(1,H2O,IEEE4)
+  Sample(1,CO2_signal,IEEE4)
+  Sample(1,H2O_signal,IEEE4)
+  Sample(1,diff_press,IEEE4)
+  Sample(1,source_tmpr,IEEE4)
+
+  Sample(1,pump_ON,Boolean)
+  Sample(1,pump_flow,IEEE4)
+  Sample(1,pump_tmpr,IEEE4)
+  Sample(1,pump_press,IEEE4)
+
+  #If VALVE_MODULE Then
+  Sample(1,SequenceStep,IEEE4)
+  Sample(1,smpl_counter,ieee4)
+  Sample(1,valve_number,IEEE4)
+  Sample(1,press_offset,IEEE4)
+  Sample(1,valveTctl_ON,Boolean)
+  Sample(1,valve_flow,ieee4)
+  Sample(1,valve_tmpr,ieee4)
+
+  #If SCRUB_MODULE Then
+  Sample(1,scrub_tmpr,ieee4)
+  Sample(1,scrub_press,ieee4)
+  #EndIf 'end of if SCRUB_MODULE
+
+  #EndIf 'end of if VALVE_MODULE
+
+  Sample(1,buff_depth, ieee4)
+EndTable 'end of message_log
+
+
+'*** End of output data tables ***
+
+
+'********************************* Beginning of subroutines ***************
+
+'subroutine to write messages message_log table
+Sub WriteMessage(message_str_local As String * 72)
+  message_str = null_str 'clear out old text
+  message_str = message_str_local
+  CallTable message_log_300m
+EndSub 'end of sub WriteMessage
+
+
+'subroutine to configure the EC100
+Dim configure_ec100_f As Boolean = TRUE  'always configure the EC100 on startup
+Dim ec155_power_f As Boolean 'a semaphore that indicates we need to turn the irga on or off
+Dim no_irga_data As Boolean  'indicates no data received from EC100 for the irga
+Dim irga_OFF As Boolean      'irga is powered down (for any reason)
+Dim irga_tmpr_BAD As Boolean 'irga has powered itself down because src_tmpr is out of range
+Dim NAN_cnt As Long          'number of times we have received no data
+
+Sub Config_EC100 (cmd_array(4,2),num_cmd As Long,retry_config_f As Boolean)
+
+  Dim config_result As Long
+  Dim set_result As Long,
+  Dim save_result As Long
+
+  set_result = 2
+  save_result = 2
+
+  For i = 1 To num_cmd
+    EC100Configure (set_result,EC100_SDM_ADDR,cmd_array(i,1),cmd_array(i,2))
+    If ( set_result = NAN ) Then ( ExitSub ) 'failed. do not reset retry_config_f and we will try again next time
+  Next i
+
+  'if we get here, we must have successfully set all requsted values.
+  'Tell the EC100 to save to flash memory.
+  EC100Configure (save_result,EC100_SDM_ADDR,99,2718)
+  If ( save_result = NAN ) Then ExitSub
+
+  'if we get here we must be all done
+  retry_config_f = false
+
+EndSub 'end of subConfig_EC100
+
+
+'generic PID control subroutine
+Sub PID_control (__MV,__PV,__SP,__PV_prev, __deriv_prev,__sign,__MV_min,__MV_max,__P,__I,__D, __BuffDepth)
+
+  '__MV: manipulated variable - the control output: passed into this sub, updated, and returned to main
+  '__PV: process variable - the measured value to be controlled
+  '__SP: setpoint - The goal is to make the process variable __PV match the setpoint __SP
+  '__PV_prev:  previous value of the process variable - Set here and returned to main program so it can be passed back here next time
+  '__deriv_prev: previous value of the derivative of the process variable - Passed back/forth similar to __PV_prev
+  '__sign: either +1 or -1. Determines whether a positive error increases or decreases the manipulated variable
+  '__MV_min, __MV_max: minimum and maximum values of the control output - used to prevent windup
+  '__P, __I, __D: the P, I, and D coefficients
+  '__BuffDepth: pipeline buffer depth - used to decrease the gain of the PID control when we get behind
+
+
+  Dim __error   'the error in the process variable
+  Dim __deriv   'the derivative (change from previous value) of the process variable
+  Dim __deriv2  'second derivative of the process variable
+
+  'calculate error and derivatives of the process variable
+  __error = __PV - __SP
+  __deriv = __PV - __PV_prev
+  __deriv2 = __deriv - __deriv_prev
+
+  'save current values for next time
+  __PV_prev = __PV
+  __deriv_prev = __deriv
+
+  'adjust the manipulated variable
+  'Note: this step is an integration, so __P is applied to __deriv (integral of a derivative), etc.
+  __MV += __sign * (__deriv*__P + __error*__I + __deriv2*__D) / (__BuffDepth+1)^2
+
+  'Anti-windup.
+  If (__MV < __MV_min) Then __MV = __MV_min
+  If (__MV > __MV_max) Then __MV = __MV_max
+
+EndSub 'end of sub PID_control
+
+
+'subroutines that are used only if we use the valve module
+#If VALVE_MODULE Then
+Const BLOCK_MEAN_LENGTH = 5*SCANS_PER_SEC 'Block mean length in scans. Used to find mean of zero, CO2 span, and H2O span during a zero and span.
+Const COUNTS_TO_SET_ZERO = 2*SCANS_PER_SEC 'Used to calculate when to set the zero and span (counts before end of omits)
+Dim SetZeroSpanCounts 'similar to OmitCounts, but defines when to set zero or span relative to valve switch
+
+Dim CalSequence(SEQUENCE_LENGTH) As Long = {0,2,1,1,2,2,3,4,5,0,0} 'valve_number at each step in the sequence
+Dim valve_Tctl_offset As Long 'time offset to allow us to start the valve temperature control early
+
+'subroutine to initialize and start a zero/span sequence
+Sub Start_the_Sequence_Now
+
+  'check for errors, and abort the sequence startup if necessary
+  If (NOT CHECK_ZERO) Then
+    WriteMessage("ERROR: Cannot run Zero/Span sequence - CHECK_ZERO is False")
+    STARTsequence = false
+    ExitSub
+  EndIf
+
+  If (NOT valve_tmprOK) Then
+    WriteMessage("ERROR: Cannot run Zero/Span sequence - Check valve temperature")
+    STARTsequence = false
+    ExitSub
+  EndIf
+
+  #If SCRUB_MODULE Then
+  If (NOT scrub_tmprOK) Then
+    WriteMessage("ERROR: Cannot run Zero/Span - Check scrub module temperature")
+    STARTsequence = false
+    ExitSub
+  EndIf
+  #EndIf 'end of #if SCRUB_MODULE
+
+  'define which bits on the SDM-CD16S to turn on for each step in the sequence
+  Tmd_Ctl(1, TC_bits) = 0       'pump off, no valve
+  Tmd_Ctl(2, TC_bits) = Bit(2)  'Check CO2 Span 1
+
+  #If SCRUB_MODULE Then
+  Tmd_Ctl(3, TC_bits) = Bit(1)+Bit(11)  'Check Zero (turn on the scrub pump)
+  Tmd_Ctl(4, TC_bits) = Bit(1)+Bit(11)  'Set Zero
+  #Else 'end of #if SCRUB_MODULE
+  Tmd_Ctl(3, TC_bits) = Bit(1)  'Check Zero (no scrub pump)
+  Tmd_Ctl(4, TC_bits) = Bit(1)  'Set Zero
+  #EndIf 'end of #if not SCRUB_MODULE
+
+  Tmd_Ctl(5, TC_bits) = Bit(2)  'Recheck CO2 Span 1
+  Tmd_Ctl(6, TC_bits) = Bit(2)  'Set CO2 Span 1
+  Tmd_Ctl(7, TC_bits) = Bit(3)  'Check CO2 Span 2
+  Tmd_Ctl(8, TC_bits) = Bit(4)  'Check CO2 Span 3
+  Tmd_Ctl(9, TC_bits) = Bit(5)  'Check CO2 Span 4
+  Tmd_Ctl(10,TC_bits) = 0       'equilibrate on EC
+  Tmd_Ctl(11,TC_bits) = 0       'indicates we are done with the sequence
+
+  'Load valve timing information
+  Tmd_Ctl(1,TC_counts) = 10*SCANS_PER_SEC
+  If CHECK_SPAN1  Then Tmd_Ctl(2,TC_counts) = SPAN_TIME*SCANS_PER_SEC Else Tmd_Ctl(2,TC_counts) = 0
+  If CHECK_ZERO   Then Tmd_Ctl(3,TC_counts) = ZERO_TIME*SCANS_PER_SEC Else Tmd_Ctl(3,TC_counts) = 0
+  If SET_ZERO     Then Tmd_Ctl(4,TC_counts) = 10*SCANS_PER_SEC        Else Tmd_Ctl(4,TC_counts) = 0
+  If CHECK_SPAN1  Then Tmd_Ctl(5,TC_counts) = SPAN_TIME*SCANS_PER_SEC Else Tmd_Ctl(5,TC_counts) = 0
+  If SET_SPAN_1   Then Tmd_Ctl(6,TC_counts) = 10*SCANS_PER_SEC        Else Tmd_Ctl(6,TC_counts) = 0
+  If CHECK_SPAN2  Then Tmd_Ctl(7,TC_counts) = SPAN_TIME*SCANS_PER_SEC Else Tmd_Ctl(7,TC_counts) = 0
+  If CHECK_SPAN3  Then Tmd_Ctl(8,TC_counts) = SPAN_TIME*SCANS_PER_SEC Else Tmd_Ctl(8,TC_counts) = 0
+  If CHECK_SPAN4  Then Tmd_Ctl(9,TC_counts) = SPAN_TIME*SCANS_PER_SEC Else Tmd_Ctl(9,TC_counts) = 0
+  Tmd_Ctl(10,TC_counts) = 10*SCANS_PER_SEC 'turn on pump and let it stabilize
+  Tmd_Ctl(11,TC_counts) = 1 'stop the sequence
+
+  STARTsequence = TRUE
+  pump_ON = false
+  pump_ON_prev = false 'don't want to write the message as part of a sequence start/stop
+  valve_mode = StartUp
+  valveTctl_ON = TRUE
+
+EndSub ' end of sub Start_the_Sequence_Now
+
+
+Sub Stop_the_Sequence_Now
+  ' Load parameters and reinitialize TimedControl so the user can change the value of Site to control the valve manually
+
+  valve_number = None 'default is no valves open
+
+  Tmd_Ctl(1,TC_bits) = 0
+  Tmd_Ctl(1,TC_counts) = 1
+
+  STARTsequence = false
+  pump_ON = true
+  pump_ON_prev = true 'don't want to write the message as part of a sequence start/stop
+  valve_mode = Manual
+  valveTctl_ON = false
+
+EndSub 'end of sub Stop_the_Sequence_Now
+#EndIf 'end of #if VALVE_MODULE
+
+
+Sub calculate_delay()  'calculate lag times based on BANDWIDTH and PUMP_SETPT
+
+  delay_EC100_msec = 4000/BANDWIDTH 'EC100 processing lag (milliseconds) depends on bandwidth setting.
+  delay_tube_msec = 1000*60*(TUBE_VOLUME/PUMP_SETPT) ' physical travel time from inlet to center of sample cell (milliseconds)
+
+  irga_RecsBack = LagBufferScans - Round((delay_EC100_msec + delay_tube_msec)/SCAN_INTERVAL,0)
+  sonic_RecsBack = LagBufferScans - Round((delay_EC100_msec)/SCAN_INTERVAL,0)
+  pump_RecsBack = LagBufferScans
+
+EndSub 'end of sub calculate_delay
+
+
+Sub Save_ConfigFile
+  'save the system configuration variables
+  'sys_conf_var has both floats and booleans
+
+  'get the floats from the float array
+  For i = 1 To N_config_float
+    sys_conf_var(i)      = config_float(i)
+    config_float_prev(i) = config_float(i)
+  Next i
+
+  'get the booleans from the boolean array
+  For j = 1 To N_config_bool
+    sys_conf_var(i)     = config_bool(j)
+    config_bool_prev(j) = config_bool(j)
+    i = i+1
+  Next j
+
+  'Store the new values to the file
+  Calfile (sys_conf_var(1),N_config_float+N_config_bool,"CPU:sys_conf_var.dat",0)
+
+  writemessage("System configuration saved")
+
+  CallTable(config_history_300m)
+  config_done_today = true 'don't do it again today
+
+EndSub 'end of sub Save_ConfigFile
+
+
+Sub CalculateDewpoint(Td_H2O, Td_press, Td_returned)
+  Dim f3, VP, z
+  f3 = 1.0007 + (Td_press*10)*3.46e-6 'enhancement factor (eq. 7c)
+  VP = Td_press *(Td_H2O/(1000+Td_H2O)) 'vapor pressure in the cell (kPa)
+  z = LOG (VP*10.0/(6.1121*f3)) 'intermediate step (eq. 7b). factor of 10 converts kPa to mb
+  Td_returned = (240.97*z)/(17.502-z) 'Buck (1981) Eq. (2a, 3a, & 6) and Leuning (2004) Eq. (6.23)
+EndSub 'end of sub CalculateDewpoint
+
+
+'subroutine to process slow scan measurements
+Sub process_slow_cpec()
+
+  'Check configuration variables, in case the user changed them
+  '...and deal with any other tasks required when a config var changes
+  If BATT_LOWLIMIT < 10.0 Then BATT_LOWLIMIT = 10.0
+  If BATT_LOWLIMIT > 15 Then BATT_LOWLIMIT = 15
+
+  If BATT_DEADBAND < 0 Then BATT_DEADBAND = 0
+  If BATT_DEADBAND > 10 Then BATT_DEADBAND = 10
+
+  If (SONIC_AZIMUTH < 0) Then SONIC_AZIMUTH = 0
+  If (SONIC_AZIMUTH > 360) Then SONIC_AZIMUTH = 360
+
+  'BANDWIDTH must be 5, 10, 12, 20, or 25
+  Select Case Round(BANDWIDTH,0)
+  Case Is <= 7
+    BANDWIDTH = 5
+  Case 8 To 11
+    BANDWIDTH = 10
+  Case 12 To 15
+    BANDWIDTH = 12
+  Case 16 To 22
+    BANDWIDTH = 20
+  Case Else
+    BANDWIDTH = 25
+  EndSelect
+
+
+  If AMB_PRESS_NOMINAL < 0 Then AMB_PRESS_NOMINAL = 0
+  'fun fact: lowest point on earth is the Dead Sea, at -413 m...ambient pressure is ~106.4 kPa
+  If AMB_PRESS_NOMINAL > 110 Then AMB_PRESS_NOMINAL = 110
+
+  If (PUMP_SETPT < 3) Then PUMP_SETPT = 3
+  If (PUMP_SETPT > 9) Then PUMP_SETPT = 9
+
+  ' Cal interval must be an integer, at least as long as the output interval, and not more than one day
+  CAL_INTERVAL = Round(CAL_INTERVAL,0)
+  If CAL_INTERVAL < OUTPUT_INTERVAL Then CAL_INTERVAL = OUTPUT_INTERVAL
+  If CAL_INTERVAL > 60*24 Then CAL_INTERVAL = 60*24
+  cal_interval_sec = 60*CAL_INTERVAL
+
+  ' Cal start time offset must be an integer, and between zero and the length of the cal interval
+  CAL_TIMEOFFSET = Round(CAL_TIMEOFFSET,0)
+  If CAL_TIMEOFFSET < 0 Then CAL_TIMEOFFSET = 0
+  If CAL_TIMEOFFSET >= CAL_INTERVAL Then CAL_TIMEOFFSET = 0
+  cal_timeoffset_sec = 60*CAL_TIMEOFFSET
+
+  If ZERO_TIME < 20 Then ZERO_TIME = 20
+  If ZERO_TIME > 300 Then ZERO_TIME = 300
+
+  If SPAN_TIME < 20 Then SPAN_TIME = 20
+  If SPAN_TIME > 300 Then SPAN_TIME = 300
+
+  If CAL_FLOW_SETPT < 1.0 Then CAL_FLOW_SETPT = 1.0
+  If CAL_FLOW_SETPT > 5.0 Then CAL_FLOW_SETPT = 5.0
+
+  If (CO2_SPAN_PPM < 300) Then CO2_SPAN_PPM = 300
+  If (CO2_SPAN_PPM > 1000) Then CO2_SPAN_PPM = 1000
+
+
+  If SET_SPAN_1 Then CHECK_SPAN1 = true 'must check first, to flow gas to equilibrate
+
+  'do we need to save the config file because a config var changed?
+  something_changed = false
+  For i = 1 To N_config_float
+    If config_float(i) <> config_float_prev(i) Then something_changed = true
+  Next i
+  For i = 1 To N_config_bool
+    If config_bool(i) <> config_bool_prev(i) Then something_changed = true
+  Next i
+  If something_changed Then
+    'do we need to recalculate lags because a config var changed?
+    If ((PUMP_SETPT <> PUMP_SETPT_prev) OR (BANDWIDTH <> BANDWIDTH_prev)) Then
+      Call calculate_delay()'calculate new lags
+    EndIf
+
+    'do we need to reconfigure the EC100 because a config var changed?
+    If (BANDWIDTH <> BANDWIDTH_prev) OR (USE_DIFF_PRESS <> USE_DIFF_PRESS_prev) Then
+      configure_ec100_f = true
+    EndIf
+
+    Call Save_ConfigFile
+  EndIf 'end of if a config var changed
+
+  'do the processing of the slow measurements
+
+  If (BattVolt < BATT_LOWLIMIT) Then  BattVolt_OK = false
+  If (BattVolt > (BATT_LOWLIMIT+BATT_DEADBAND)) Then  BattVolt_OK = true
+  'and if it is in the battery deadband, leave it as is
+
+
+  'pump module temperature
+  'Calculate thermistor temperature using Steinhart-Hart equation
+  pump_tmpr_volts = LOG( 249000*(5000-pump_tmpr_volts)/pump_tmpr_volts)
+  pump_tmpr = 1/(8.271111e-4+2.088020e-4*pump_tmpr_volts+8.059200e-8*pump_tmpr_volts*pump_tmpr_volts*pump_tmpr_volts)-273.15
+
+  pump_heat_ON = (pump_tmpr < PumpHeatSetPt)
+
+  If (pump_tmpr > PumpFanSetPt) Then pump_fan_ON = TRUE
+  If (pump_tmpr < PumpFanSetPt-PumpFanDeadBand) Then pump_fan_ON = false
+  'and if it is in the fan deadband, leave it as is
+
+  'disable the pump if it is too warm or too cold
+  pump_tmpr_OK = ((pump_tmpr > PumpOKMinTemp) AND (pump_tmpr < PumpOKMaxTemp))
+
+
+  #If VALVE_MODULE Then
+  'valve module temperature
+  valve_tmpr_volts = LOG (249000*(5000-valve_tmpr_volts)/valve_tmpr_volts)
+  valve_tmpr = (1/(8.271111e-4+valve_tmpr_volts*(2.088020e-4+8.059200e-8*valve_tmpr_volts*valve_tmpr_volts)))-273.15
+
+  If valveTctl_ON Then
+    valveHeat_ON = (valve_tmpr < ValveHeatSetPt)
+
+    'valve fan control
+    If (valve_tmpr > ValveFanSetPt) Then  valveFan_ON = TRUE
+    If (valve_tmpr < ValveFanSetPt-ValveFanDeadBand) Then  valveFan_ON = false
+    'and if it is in the fan deadband, leave it as is
+
+  Else
+    valveHeat_ON = false
+    valveFan_ON = false
+  EndIf
+
+  'disable the valves if they are too warm or too cold
+  valve_tmprOK = ((valve_tmpr > ValveOKMinTemp) AND (valve_tmpr < ValveOKMaxTemp))
+
+  #If SCRUB_MODULE Then
+  'scrub module temperature
+  scrub_tmpr_volts = LOG (249000*(5000-scrub_tmpr_volts)/scrub_tmpr_volts)
+  scrub_tmpr = (1/(8.271111e-4+scrub_tmpr_volts*(2.088020e-4+8.059200e-8*scrub_tmpr_volts*scrub_tmpr_volts)))-273.15
+
+  If valveTctl_ON Then 'enable/disable temperature control along with the valve module
+    scrubHeat_ON = (scrub_tmpr < ScrubHeatSetPt)
+
+    If (scrub_tmpr > ScrubFanSetPt) Then  scrubFan_ON = TRUE
+    If (scrub_tmpr < ScrubFanSetPt-ScrubFanDeadBand) Then  scrubFan_ON = false
+    'and if it is in the fan deadband, leave it as is
+
+  Else
+    scrubHeat_ON = false
+    scrubFan_ON = false
+  EndIf
+
+  'disable the scrub module if too warm or too cold
+  scrub_tmprOK = ((scrub_tmpr > ScrubOKMinTemp) AND (scrub_tmpr < ScrubOKMaxTemp))
+
+  #EndIf 'end if #if SCRUB_MODULE
+
+  #EndIf 'end of #if VALVE_MODULE
+
+
+  'intake heater control
+  #If Leaf_Wetness_Sensor Then
+
+  Select Case leaf_wetness
+  Case Is = NAN
+    intake_heater = INTAKE_HEATER_MAX
+  Case Is < LWS_MIN
+    intake_heater = -1 'heater off
+  Case LWS_MIN To LWS_MAX
+    intake_heater = INTAKE_HEATER_MAX * SQR(leaf_wetness - LWS_MIN)
+  Case Else
+    intake_heater = INTAKE_HEATER_MAX
+  EndSelect
+
+  'end of #if Leaf_Wetness_Sensor
+  #Else
+  'no leaf wetness sensor
+  intake_heater = INTAKE_HEATER_MAX 'full power all the time
+
+  #EndIf 'end of #if no leaf wetness sensor
+
+
+  If (irga_OFF OR (NOT BattVolt_OK)) Then intake_heater = -1 'override: turn intake heater off
+
+  If (intake_heater <> intake_heater_prev) Then
+    EC100Configure (intake_heater_result,EC100_SDM_ADDR,18,intake_heater) 'Set heater voltage
+    intake_heater_prev = intake_heater
+  EndIf
+
+  #If CALCULATE_Td Then
+  CalculateDewpoint(H2O_avgrun, cell_press_avgrun, Td_cell)
+  CalculateDewpoint(H2O_avgrun, (cell_press_avgrun - diff_press_avgrun), Td_ambient)
+  #EndIf
+
+EndSub 'end of sub process_slow_cpec
+
+'end of subroutines
+
+'******************************************************************************************************************
+'Custom keyboard menu
+'note: MenuItem() displays an extra character on the first line if MenuPick() is used.
+
+DisplayMenu("CPEC200 Menu",-1)
+
+  SubMenu(" Check Status")
+    DisplayLine(mode_status)
+    DisplayLine(cpec_status)
+
+    SubMenu(" Battery Status Menu")
+      DisplayValue("BattVolt",BattVolt)
+      MenuItem(    "BattVolt_OK         If BattVolt_OK is   False and BattVolt  is > BATT_LOWLIMIT, try setting         BattVolt_OK = True.",BattVolt_OK)
+      DisplayValue("BATT_LOWLIMIT       CPEC200 powers down at this voltage     to protect battery. Go to Configure     System menu to      change this setting.", BATT_LOWLIMIT)
+      DisplayValue("BATT_DEADBAND       CPEC200 powers up   when battery        voltage reaches     BATT_LOWLIMIT +     BATT_DEADBAND.      Go to Configure     System menu to      change this setting.", BATT_DEADBAND)
+    EndSubMenu 'battery voltage
+
+    SubMenu(" IRGA Status Menu")
+      DisplayLine(irga_status)
+      DisplayValue("CO2",CO2)
+      DisplayValue("H2O",H2O)
+      DisplayValue("diag_irga",diag_irga)
+      DisplayValue("cell_tmpr",cell_tmpr)
+      DisplayValue("cell_press",cell_press)
+      DisplayValue("CO2_signal",CO2_signal)
+      DisplayValue("H2O_signal",H2O_signal)
+      DisplayValue("diff_press",diff_press)
+      DisplayValue("source_tmpr",source_tmpr)
+    EndSubMenu 'irga status
+
+    SubMenu(" Sonic Status Menu")
+      DisplayLine(sonic_status)
+      DisplayValue("Ux",Ux)
+      DisplayValue("Uy",Uy)
+      DisplayValue("Uz",Uz)
+      DisplayValue("Ts",Ts)
+      DisplayValue("diag_sonic",diag_sonic)
+    EndSubMenu 'sonic status
+
+    SubMenu(" Pump Status Menu")
+      DisplayLine(mode_status)
+      DisplayLine(pump_status)
+      MenuItem(    "pump_ON             Choose True         to turn pump on.    Choose False        to turn pump off.",pump_ON)
+      DisplayValue("pump_flow",pump_flow)
+      DisplayValue("PUMP_SETPT          Pump flow setpoint  (LPM) for EC mode.  Go to Configure     System menu to      change this setting.",PUMP_SETPT)
+      DisplayValue("pump_control",pump_control)
+      DisplayValue("pump_press",pump_press)
+      DisplayValue("pump_tmpr",pump_tmpr)
+      DisplayValue("pump_heat_ON",pump_heat_ON)
+      DisplayValue("pump_fan_ON",pump_fan_ON)
+      DisplayValue("buff_depth",buff_depth)
+      DisplayValue("irga_OFF",irga_OFF)
+      DisplayValue("BattVolt",BattVolt)
+    EndSubMenu 'pump status
+
+    SubMenu(" Valve Status Menu")
+      DisplayLine(mode_status)
+      DisplayLine(valve_status)
+      #If VALVE_MODULE Then
+      MenuItem(    "valve_number         Choose from list    to select a valve.", valve_number): MenuPick(None,ZeroAir,CO2span1,CO2span2,CO2span3,CO2span4,H2Ospan)
+      DisplayValue("valve_flow",valve_flow)
+      DisplayValue("CAL_FLOW_SETPT      Valve flow          setpoint (LPM)      for zero/span.      Go to Configure     System menu to      change this setting.",CAL_FLOW_SETPT)
+      DisplayValue("valveControl",valveControl)
+      DisplayValue("press_offset",press_offset)
+      DisplayValue("valve_tmpr",valve_tmpr)
+      MenuItem(    "valveTctl_ON        Choose True to keep valves within       operating range.    Choose False        to save power when  valves are not used.",valveTctl_ON)
+      DisplayValue("valveHeat_ON",valveHeat_ON)
+      DisplayValue("valveFan_ON",valveFan_ON)
+
+      #If SCRUB_MODULE Then
+      DisplayValue("scrub_tmpr",scrub_tmpr)
+      DisplayValue("scrubHeat_ON",scrubHeat_ON)
+      DisplayValue("scrubFan_ON",scrubFan_ON)
+      DisplayValue("scrub_press",scrub_press)
+      #EndIf 'end of if SCRUB_MODULE
+
+      #EndIf 'end of if VALVE_MODULE
+
+    EndSubMenu 'valve status
+  EndSubMenu 'check status submenu
+
+  #If VALVE_MODULE Then
+  SubMenu (" Manual Zero/Span")
+    DisplayLine(mode_status)
+    DisplayLine(cpec_status)
+    DisplayLine(valve_status)
+
+    SubMenu (" Temperature Control")
+      DisplayLine(valve_status)
+      MenuItem(    "valveTctl_ON        Choose True to keep valves within       operating range.    Choose False        to save power when  valves are not used.",valveTctl_ON)
+      DisplayValue("valve_tmprOK",valve_tmprOK)
+      DisplayValue("valve_tmpr",valve_tmpr)
+      DisplayValue("valveHeat_ON",valveHeat_ON)
+      DisplayValue("valveFan_ON",valveFan_ON)
+
+      #If SCRUB_MODULE Then
+      DisplayValue("scrub_tmprOK",scrub_tmprOK)
+      DisplayValue("scrub_tmpr",scrub_tmpr)
+      DisplayValue("scrubHeat_ON",scrubHeat_ON)
+      DisplayValue("scrubFan_ON",scrubFan_ON)
+      #EndIf 'SCRUB_MODULE
+    EndSubMenu 'temperature control
+
+    SubMenu(" Run Zero/Span Seq"
+      DisplayValue("CO2_SPAN_PPM        Verify the CO2      concentration (ppm) in CO2 span tank.   Go to Configure     System menu to      change this setting.",CO2_SPAN_PPM)
+      MenuItem(    "STARTsequence        Choose True         to initiate         a manual zero/span  sequence now.",STARTsequence) : MenuPick(True)
+      MenuItem(    "pump_ON              Choose True         to turn punp ON     and abort a         zero/span sequence  now.",pump_ON) : MenuPick(True)
+      DisplayLine(mode_status)
+      DisplayLine(cpec_status)
+      DisplayLine(valve_status)
+      DisplayLine(latest_note)
+      DisplayValue("CO2",CO2)
+      DisplayValue("H2O",H2O)
+    EndSubMenu 'run zero/span sequence
+
+    SubMenu(" Manual Control")
+      DisplayLine(mode_status)
+      DisplayLine(valve_status)
+
+      SubMenu("  Pressure Offset")
+        DisplayLine(mode_status)
+        DisplayLine("Turn pump Off, set  DO_P_offset = True, and wait            for press_offset    to update (~10 s).")
+        MenuItem(    "pump_ON              Choose False        to turn pump OFF    to enter manual     zero/span mode.",pump_ON) : MenuPick(false,True)
+        MenuItem(    "DO_P_offset          Choose True         to stop valve flow  and measure         pressure offset.",DO_P_offset) : MenuPick(True)
+        DisplayValue("valve_number",valve_number)
+        DisplayValue("cell_press",cell_press)
+        DisplayValue("press_offset",press_offset)
+      EndSubMenu
+
+      SubMenu("  CO2 and H2O Zero")
+        DisplayLine("Select the zero air valve and wait for  CO2 and H2O         to stabilize.       Then check status   and do the zero.")
+        MenuItem ("valve_number", valve_number) : MenuPick(ZeroAir)
+        DisplayValue("valve_flow",valve_flow)
+        DisplayLine(valve_status)
+        DisplayValue("CO2",CO2)
+        DisplayValue("H2O",H2O)
+        DisplayLine(cpec_status)
+        MenuItem("DO_zero",DO_zero) : MenuPick(True)
+        MenuItem ("valve_number", valve_number) : MenuPick(None)
+      EndSubMenu
+
+      SubMenu("  CO2 Span")
+        DisplayLine("Select a CO2 span   valve and wait for  CO2 to stabilize.   Then check status   and do the CO2 span.")
+        MenuItem ("valve_number", valve_number) : MenuPick(CO2span1,CO2span2,CO2span3,CO2span4)
+        DisplayValue("valve_flow",valve_flow)
+        DisplayLine(valve_status)
+        MenuItem(    "CO2_SPAN_PPM        Enter concentration of CO2 in CO2 span  cylinder (ppm).     Must be 300 to 1000.", CO2_SPAN_PPM)
+        DisplayValue("CO2",CO2)
+        DisplayValue("H2O",H2O)
+        DisplayLine(cpec_status)
+        MenuItem("DO_CO2_span",DO_CO2_span) : MenuPick(True)
+        MenuItem ("valve_number", valve_number) : MenuPick(None)
+      EndSubMenu
+
+      SubMenu("  H2O Span")
+        DisplayLine("Select the H2O span valve and wait for  H2O to stabilize.   Then check status   and do the H2O span.")
+        MenuItem ("valve_number", valve_number) : MenuPick(H2Ospan)
+        DisplayValue("valve_flow",valve_flow)
+        DisplayLine(valve_status)
+        DisplayValue("CO2",CO2)
+        DisplayValue("H2O",H2O)
+        DisplayValue ("Td_cell",Td_cell)
+        DisplayValue ("Td_ambient",Td_ambient)'also verify this matches Td_cell (while they are at the same pressure)
+        MenuItem("H2OSpanDewPt",H2OSpanDewPt)
+        DisplayLine(cpec_status)
+        MenuItem("DO_H2O_span",DO_H2O_span) : MenuPick(True)
+        MenuItem ("valve_number", valve_number) : MenuPick(None)
+      EndSubMenu
+
+      MenuItem ("Pump_ON",pump_ON)
+
+    EndSubMenu 'manual control
+    MenuItem ("Pump_ON",pump_ON)
+  EndSubMenu 'Manual Zero/Span
+
+  #EndIf 'end of if valve_module
+
+  SubMenu(" Configure System")
+    MenuItem("PUMP_SETPT          Enter pump flow     setpoint (LPM).     Must be 3 to 9.     Default is 7.", PUMP_SETPT)
+    MenuItem("BATT_LOWLIMIT       Enter battery lower limit (volts).      CPEC200 will power  down to protect     battery from deep   discharge.          Must be 10 to 15.   Default is 10.", BATT_LOWLIMIT)
+    MenuItem("BATT_DEADBAND       Enter battery       deadband (volts).   CPEC200 will power  up when battery     voltage reaches     BATT_LOWLIMIT +     BATT_DEADBAND.      Must be 0 to 10.    Default is 1.", BATT_DEADBAND)
+
+    MenuItem("SONIC_AZIMUTH       Enter angle (deg)   between true north  and direction the   CSAT3A is pointing. Must be 0 to 360.", SONIC_AZIMUTH)
+
+    SubMenu("  EC155 Config")
+      Const BW_5Hz = 5
+      Const BW_10Hz = 10
+      Const BW_12_5Hz = 12
+      Const BW_20Hz = 20
+      Const BW_25Hz = 25
+      MenuItem("BANDWIDTH            EC100 digital       filter bandwidth.   Choose 5 Hz if      doing spectral      analysis.           Otherwise           choose 20 Hz.       Default is 20 Hz.",BANDWIDTH) : MenuPick(BW_5Hz,BW_10Hz,BW_12_5Hz,BW_20Hz,BW_25Hz)
+      MenuItem("USE_DIFF_PRESS      Choose True for     normal operation.   Choose False if you have installed an   external pressure   sensor on the       sample cell.        Default is True.",USE_DIFF_PRESS)
+      MenuItem("AMB_PRESS_NOMINAL   Enter nominal       ambient pressure    (kPa) for your      elevation.          Ignored unless      USE_DIFF_PRESS =    False.              Must be 0 to 110.   Default is 0.",AMB_PRESS_NOMINAL)
+    EndSubMenu 'EC155 Config
+
+    SubMenu("  Zero/Span Config")
+      MenuItem("CAL_INTERVAL        Enter time (min)    between zero/span   sequences.          Must be 30 to 1440  (half hour to day). Default is 1440.", CAL_INTERVAL)
+      MenuItem("CAL_TIMEOFFSET      Enter time (min)    into interval       to start zero/span  sequence. Must be   0 to CAL_INTERVAL. Default is 59.", CAL_TIMEOFFSET)
+      MenuItem("ZERO_TIME           Enter time (sec)    to flow zero air    during zero/span    sequence.           Must be 20 to 300. Default is 60.", ZERO_TIME)
+      MenuItem("SPAN_TIME           Enter time (sec)    to flow             CO2 span gas during zero/span sequence. Must be 20 to 300. Default is 30.", SPAN_TIME)
+      MenuItem("CAL_FLOW_SETPT      Enter flow rate     setpoint (LPM)      for zero/span.      Must be 1 to 5.     Default is 1.", CAL_FLOW_SETPT)
+      MenuItem("CO2_SPAN_PPM        Enter concentration of CO2 in CO2 span  cylinder (ppm).     Must be 300 to 1000.", CO2_SPAN_PPM)
+      MenuItem("CHECK_ZERO          Choose True         to enable zero/span sequences and       check the zero.     Choose False to    disable zero/span   sequences.          Recommended: True.", CHECK_ZERO)
+      MenuItem("SET_ZERO            Choose True         to set the zero     after checking it.  Choose False        to skip this step. Recommended: True.", SET_ZERO)
+      MenuItem("CHECK_SPAN1         Choose True to      check the CO2 span. Choose False        to skip this step.  Must be True       to set the span.    Recommended: True.", CHECK_SPAN1)
+      MenuItem("SET_SPAN_1          Choose True         to set the CO2 span after checking it.  Choose False        to skip this step. Recommended: True.", SET_SPAN_1)
+      MenuItem("CHECK_SPAN2         Choose True to      check the CO2 span  with a second       CO2 span cylinder.  Choose False       to skip this step.", CHECK_SPAN2)
+      MenuItem("CHECK_SPAN3         Choose True to      check the CO2 span  with a third        CO2 span cylinder.  Choose False       to skip this step.",  CHECK_SPAN3)
+      MenuItem("CHECK_SPAN4         Choose True to      check the CO2 span  with a fourth       CO2 span cylinder.  Choose False       to skip this step.",  CHECK_SPAN4)
+    EndSubMenu 'Zero/Span Config
+
+  EndSubMenu 'configure system
+
+EndMenu
+
+
+
+'Program the GPS16-HVS to use 38.4 kbaud, no parity, 8 data bits, and 1 stop bit
+'*** Wiring ***
+'CONTROL PORTS
+
+'C3   GPS16-HVS pulse per second (gray)
+'C4   GPS16-HVS RS-232 TxD (white)
+'G    yellow, blue, shield
+
+'POWER OUT
+
+'12V  GPS16-HVS power (red)
+'G    GPS16-HVS power and RS-232 signal reference (black)
+
+Const LOCAL_TIME_OFFSET = 9            'Local time offset relative to UTC time
+
+ 
+
+Dim nmea_sentence(2) As String * 90
+Public gps_data(15)
+Alias gps_data(1) = latitude_a          'Degrees latitude (+ = North; - = South)
+Alias gps_data(2) = latitude_b          'Minutes latitude
+Alias gps_data(3) = longitude_a         'Degress longitude (+ = East; - = West)
+Alias gps_data(4) = longitude_b         'Minutes longitude
+Alias gps_data(5) = speed               'Speed
+Alias gps_data(6) = course       'Course over ground
+Alias gps_data(7) = magnetic_variation  'Magnetic variation from true north (+ = East; - = West)
+Alias gps_data(8) = fix_quality         'GPS fix quality: 0 = invalid, 1 = GPS, 2 = differential GPS, 6 = estimated
+Alias gps_data(9) = nmbr_satellites     'Number of satellites used for fix
+Alias gps_data(10) = altitude           'Antenna altitude
+Alias gps_data(11) = pps                'usec into sec of system clock when PPS rising edge occurs, typically 990,000 once synced
+Alias gps_data(12) = dt_since_gprmc     'Time since last GPRMC string, normally less than 1 second
+Alias gps_data(13) = gps_ready          'Counts from 0 to 10, 10 = ready
+Alias gps_data(14) = max_clock_change   'Maximum value the clock was changed in msec
+Alias gps_data(15) = nmbr_clock_change  'Number of times the clock was changed
+
+'Define Units to be used in data file header
+
+Units latitude_a = degrees
+Units latitude_b = minutes
+Units longitude_a = degrees
+Units longitude_b = minutes
+Units speed = m/s
+Units course = degrees
+Units magnetic_variation = unitless
+Units fix_quality = unitless
+Units nmbr_satellites = unitless
+Units altitude = m
+Units pps = ms
+Units dt_since_gprmc = s
+Units gps_ready = unitless
+Units max_clock_change = ms
+Units nmbr_clock_change = samples
+
+
+'******************************************** main program start ******************************
+BeginProg
+  
+    'Initialize CNR4 multipliers
+  SUpMult=1000/15.73  '????
+  SDnMult=1000/15.96
+  LUpMult=1000/14.05
+  LDnMult=1000/14.93
+
+  'make a null string to overwrite old text
+  null_str = "                                                                        "'72 spaces
+  one_space = " "
+
+  For i = 1 To 32
+    Bit(i) = 2^(i-1) 'numeric (decimal) values of binary bits
+  Next i
+
+  #If VALVE_MODULE Then
+  'define a text string for each step of the zero/span sequence, to be used in mode_status
+  SequenceStepText(1) =  "Measuring Pressure"
+  SequenceStepText(2) =  "Checking CO2 Span 1"
+  SequenceStepText(3) =  "Checking Zero"
+  SequenceStepText(4) =  "Setting Zero"
+  SequenceStepText(5) =  "Rechecking CO2 Span 1"
+  SequenceStepText(6) =  "Setting CO2 Span 1"
+  SequenceStepText(7) =  "Checking CO2 Span 2"
+  SequenceStepText(8) =  "Checking CO2 Span 3"
+  SequenceStepText(9) =  "Checking CO2 Span 4"
+  SequenceStepText(10) = "Equilibrating for EC"
+  SequenceStepText(11) = "Switching to EC mode"
+  #EndIf 'end of #if VALVE_MODULE
+
+  'deal with system configuration variables
+  sys_conf_var_file = FileOpen ("CPU:sys_conf_var.dat","rb",0) 'Check if a file exists.
+  sys_conf_var_file_size = FileSize (sys_conf_var_file)
+  FileClose (sys_conf_var_file)
+
+  Select Case sys_conf_var_file_size
+  Case Is = ((N_config_float+N_config_bool)* 4 + 2)  'file is correct size
+
+    'Read the values from the file.
+    writemessage("Using configuration variables from sys_conf_var.dat")
+    Calfile (sys_conf_var(1),N_config_float+N_config_bool,"CPU:sys_conf_var.dat",1)
+
+    'sys_conf_var has both floats AND booleans
+    'put the floats in the float array
+    For i = 1 To N_config_float
+      config_float(i) = sys_conf_var(i)
+      config_float_prev(i) = sys_conf_var(i)
+    Next i
+
+    'put the booleans in the boolean array
+    For j = 1 To N_config_bool
+      config_bool(j) = sys_conf_var(i)
+      config_bool_prev(j) = sys_conf_var(i)
+      i = i+1
+    Next j
+
+  Case Else  'System configuration file does not exist or is the wrong size.
+
+    'use the defaults
+    writemessage("Using default configuration variables")
+
+    'end of using defaults because there was no configuration file
+  EndSelect
+
+  'either way, write them to the file
+  CallTable(config_history_300m)'write the startup values to the history table
+  config_done_today = true 'don't do it again today
+
+
+  SDMSpeed (SDM_PER)'set the SDM speed
+
+  Call calculate_delay()'calculate lags to align sonic data with irga data
+
+  #If VALVE_MODULE Then
+  'initialize TimedControl() in manual (EC) mode
+  Stop_the_Sequence_Now
+
+  'This call to TimedControl() actually starts the sequence
+  'TC will set the valve to the default, reset SequenceStep to 0, and begin the sequence at the sync interval time
+  'TimedControl(SIZE,sync_interval,interval_units,default_value,index,array,SyncOpt)
+  TimedControl(1,0,msec,Tmd_Ctl(1,TC_bits),SequenceStep,Tmd_Ctl(),1)
+
+  #EndIf 'VALVE_MODULE
+
+
+  '******************************** do one scan to initialize some measurements ***************************************
+  'this is needed for measurements in the slow scan that are used in the main scan
+  Scan (SCAN_INTERVAL,mSec,1,1)
+    
+
+                 
+    PanelTemp (panel_tmpr,250) 'Datalogger panel temperature.
+    Battery (BattVolt)
+
+    VoltSe (pump_tmpr_volts, 1,mV5000,16,TRUE,450,250,1,0)
+
+    #If VALVE_MODULE Then
+    #If SCRUB_MODULE Then
+    VoltSe (scrub_press,   1,mV5000,17,TRUE,0,250,0.02222222,-4.444444)
+    VoltSe (scrub_tmpr_volts,1,mV5000,18,TRUE,450,250,1,0)
+    #EndIf 'SCRUB_MODULE
+    VoltSe (valve_tmpr_volts,1,mV5000,19,TRUE,450,250,1,0)
+    #EndIf 'VALVE_MODULE
+
+    #If Leaf_Wetness_Sensor Then
+    BrHalf (leaf_wetness,1,mV5000C,20,Vx1,1,3000,false,10000,250,3000,0) 'measure leaf wetness sensor
+    #EndIf 'leaf wetness sensor
+
+    process_slow_cpec
+
+  NextScan 'end of one scan to initialize slow measurements
+
+
+  '************************************ start main scan ******************************************
+
+  Scan (SCAN_INTERVAL,mSec,SCAN_BUFFER_SIZE,0)
+
+    GPS (latitude_a,Com2,LOCAL_TIME_OFFSET*3600,0,nmea_sentence(1))
+    
+    'get the time so we know if it is time to output flux data or start an automatic zero/span sequence
+    sec_since_midnight = public.timestamp(4,1) 'number of whole seconds (truncated, not rounded) at the time the measurements were made.
+    output_MODtime = sec_since_midnight MOD OUTPUT_INTERVAL_SEC
+    cal_MODtime = sec_since_midnight MOD cal_interval_sec
+
+    sec_since_message = status.timestamp(2,1) - message_log_300m.timestamp(2,1)
+    If (sec_since_message < 60) Then
+      latest_note = message_log_300m.message_str & " at " & Mid(message_log_300m.timestamp,1,19)
+    Else
+      latest_note = "(old) " & message_log_300m.message_str & " at " & Mid(message_log_300m.timestamp,1,19)
+    EndIf
+
+    process_time = Status.ProcessTime(1,1)
+    buff_depth = Status.BuffDepth(1,1)
+    buff_depth_OK = (buff_depth < PID_MaxBuffs)
+
+    'sds: for testing issues that deal with buff_depth
+    '        delay_calc = delay_g*(delay_n-buff_depth)
+    '        If delay_calc<0 Then delay_calc=0
+    '        Delay(1,delay_calc,msec)'for testing control loops when we get behind
+
+    EC100 (sonic_irga_raw(1),EC100_SDM_ADDR,3)'Get sonic and irga data.
+    'Get CSAT3 wind and sonic temperature data.
+    CSAT3 (sonic_irga_raw(1),1,3,91,20)  'diag 0 ????
+    If -10 <= sonic_irga_raw(5) AND sonic_irga_raw(5) <= 70 Then sonic_irga_raw(5) = 0
+      
+    not_used = NAN 'this is the "extra" value from the EC100 (used for EC150 but not for EC155)
+
+
+    'decode the sonic diagnostic word
+    Select Case diag_sonic
+    Case Is = NAN    'we did not get data from the EC100. Maybe it is not powered or not connected to the datalogger
+      sonic_OK = false
+      sonic_status = "ERROR: No data from sonic - Check EC100 power and communication"
+'    Case Is = -1 'the EC100 sent data to the datalogger, but it has no CSAT3A connected to it
+'      sonic_OK = FALSE
+'      sonic_status = "ERROR: No CSAT3A detected - Check CSAT3A connections to EC100"
+    Case Else 'we have new data, and the EC100 has an irga connected to it
+      sonic_OK = ((diag_sonic AND &h3f) = 0)
+      If sonic_OK Then
+        sonic_status = "Sonic is OK"
+      Else
+        sonic_status = "ERROR: Sonic problem - Check diag_sonic"
+      EndIf
+    EndSelect
+
+    'decode the irga diagnostic word.
+    Select Case diag_irga
+    Case Is = NAN    'we did not get data from the EC100. Maybe it is not powered or not connected to the datalogger
+      no_irga_data = TRUE
+      irga_OK = false
+      irga_status = "ERROR: No data from IRGA - Check EC100 power and communication"
+
+    Case Is = -1 'the EC100 sent data to the datalogger, but it has no irga connected to it
+      no_irga_data = TRUE
+      irga_OK = false
+      irga_status = "ERROR: No EC155 detected - Check EC155 connections to EC100"
+
+    Case Else 'we have new data, and the EC100 has an irga connected to it
+      no_irga_data = false
+      irga_OFF = (diag_irga AND Bit(9))
+      irga_tmpr_BAD = (diag_irga AND Bit(7))
+      irga_OK = (((diag_irga AND Bit(1)) = 0) AND (CO2_signal >= signal_min) AND (H2O_signal >= signal_min))
+
+      If irga_OK Then
+        irga_status = "IRGA is OK"
+      ElseIf irga_OFF Then
+        If NOT BattVolt_OK Then
+          irga_status = "ERROR: IRGA is OFF - Check BattVolt"
+        ElseIf irga_tmpr_BAD Then
+          irga_status = "ERROR: IRGA is OFF - Check source_tmpr"
+        Else
+          irga_status = "ERROR: IRGA is OFF"
+        EndIf
+      ElseIf ((diag_irga AND Bit(3)) > 0) Then
+        irga_status = "IRGA is starting up"
+      ElseIf ((diag_irga AND Bit(23)) > 0) Then
+        irga_status = "ERROR: diff_press problem - Check intake filter"
+      ElseIf (CO2_signal < signal_min) Then
+        irga_status = "ERROR: CO2 signal is too low - Check EC155 windows"
+      ElseIf (H2O_signal < signal_min) Then
+        irga_status = "ERROR: H2O signal is too low - Check EC155 windows"
+      Else
+        irga_status = "ERROR: IRGA problem - Check diag_irga"
+      EndIf
+    EndSelect
+
+
+    If (waiting_for_save > 0) Then
+      'we have just sent the command to power the irga head up or down...ignore NANs and reset the counter
+      NAN_cnt = 0
+      configure_ec100_f = false
+    Else
+      'count the consecutive NANs to see if we need to reconfigure the EC100
+      If no_irga_data Then
+        NAN_cnt = NAN_cnt+1
+        configure_ec100_f = false 'can't send config command right now...the EC100 is not responding...
+      Else
+        'the EC100 is responding again - have we had 5 consecutive NANs?
+        If ( NAN_cnt > 4 ) Then ( configure_ec100_f = TRUE )
+        NAN_cnt = 0
+      EndIf
+    EndIf
+
+    '------------------- running averages to calculate dewpoint temperatures in the slow scan sequence
+    #If CALCULATE_Td Then
+    AvgRun(H2O_avgrun,1,H2O,SCANS_PER_SLOW_INTERVAL)
+    AvgRun(cell_press_avgrun,1,cell_press,SCANS_PER_SLOW_INTERVAL)
+    AvgRun(diff_press_avgrun,1,diff_press,SCANS_PER_SLOW_INTERVAL)
+    #EndIf
+
+    '--------------------------------Pump speed control ------------------------------------
+    'Measure the pump pressure
+    VoltSe (pump_press,1,mV5000,15,TRUE,0,250,0.02222222,10.55556)
+
+    'Measure the pump tachometer
+    TimerIO (pump_speed,1,2,SCAN_INTERVAL,mSec)
+
+    'calculate an approximate volumetric flow rate based on pump speed
+    pump_flow = 0.172*pump_speed
+
+    'Pump speed control
+    If (pump_ON AND BattVolt_OK AND pump_tmpr_OK AND (NOT irga_OFF)) Then
+      If ((pump_flow <> NAN) AND buff_depth_OK) Then
+        Call PID_control (pump_control,pump_flow,PUMP_SETPT,pump_flow_prev,pump_deriv_prev,pump_sign,pump_min,pump_max,pump_P,pump_I,pump_D,buff_depth)
+      EndIf  'else leave it as is
+    Else
+      pump_control = 0
+    EndIf
+
+    PWM (pump_control,7,50,uSec) 'Control sample pump speed: 0.0 for off, up to 1.0 for full speed
+
+    pump_flow_OK = (ABS((pump_flow-PUMP_SETPT)/PUMP_SETPT) < 0.1) 'must be within 10% of setpoint
+
+    If pump_flow_OK Then
+      pump_status = "Pump is OK"
+    ElseIf (NOT pump_ON) Then
+      pump_status = "Pump is OFF - Set pump_ON = True to restart it"
+    ElseIf (NOT BattVolt_OK) Then
+      pump_status = "ERROR: Pump is disabled - Check BattVolt"
+    ElseIf (NOT pump_tmpr_OK) Then
+      pump_status = "ERROR: Pump is disabled - Check pump_tmpr"
+    ElseIf (irga_OFF) Then
+      pump_status = "ERROR: Pump is disabled - IRGA is OFF"
+    ElseIf (pump_flow = NAN) Then
+      pump_status = "ERROR: Pump flow is NAN"
+    ElseIf (NOT buff_depth_OK) Then
+      pump_status = "ERROR: Pump flow is not at setpoint - Check buff_depth"
+    Else
+      pump_status = "ERROR: Pump flow is not at setpoint"
+    EndIf
+
+
+    '-------------------------------- valve module flow control ------------------------------
+    #If VALVE_MODULE Then
+
+    'Set the valves and turn on Scrub Module per the TimedControl() instruction timing.
+    SDMCD16Mask(Tmd_Ctl,mask_timed_control,2)
+
+
+    'make sure we have a recent measure of press_offset for controlling valve flow
+    If pump_ON Then
+      'pump is on, so press_offset is not valid
+      AvgRun_counter = 0
+      press_offset = 0
+    Else
+      'pump is off
+      If ((valve_number = 0) AND DO_P_offset) Then
+        'Average the cell pressure
+        AvgRun(press_offset_avgrun, 1, cell_press,50)
+
+        If (AvgRun_counter > 90) Then
+          'it has been long enough to have a valid average
+          press_offset = press_offset_avgrun
+          DO_P_offset = false
+        Else
+          AvgRun_counter += 1
+          press_offset = 0
+        EndIf
+      Else
+        'pump is off, but we are not measuring press_offset
+        AvgRun_counter = 0
+        'leave press_offset as is
+      EndIf 'end of valve on
+    EndIf 'end of pump off
+
+
+    If (valve_number > 0) 'a valve is on, so we need to control valve flow
+
+      If ((press_offset = 0) OR (press_offset = NAN) OR (cell_press = NAN)) Then
+        valve_flow = NAN
+      Else
+        valve_press = cell_press-press_offset
+        Select Case valve_press
+        Case Is < -7
+          valve_flow = -18.1
+        Case -7 To 0
+          valve_flow = -20*LOG10 (1-valve_press)
+        Case 0 To 7
+          valve_flow = 20*LOG10 (1+valve_press)
+        Case Is > 7
+          valve_flow = 18.1
+        EndSelect
+      EndIf
+
+      'no need to check valve or scrub temperatures here - we stop the sequence or set valve_number to None elsewhere
+      If (BattVolt_OK AND (NOT irga_OFF) AND (valve_flow <> NAN)) Then
+        If buff_depth_OK Then
+          Call PID_control(valveControl,valve_flow,CAL_FLOW_SETPT,valve_flow_prev,valve_D_prev,valve_sign,valve_min,valve_max,valve_P,valve_I,valve_D,buff_depth)
+        EndIf  'else leave it as is
+
+        'override valve_control in some cases, and check if flow is OK
+        If valve_number = H2Ospan Then
+          valveControl = 1
+          valve_flow_OK = (valve_flow > 0.2) AND (valve_flow < 2.0)
+
+          #If SCRUB_MODULE Then
+        ElseIf valve_number = ZeroAir Then
+          valveControl = 1
+          valve_flow_OK = (valve_flow > 0.5) AND (valve_flow < 3.0)
+          #EndIf 'end of #if SCRUB_MODULE
+
+        Else
+          'leave valve_control as is
+          valve_flow_OK = (ABS(valve_flow - CAL_FLOW_SETPT)/CAL_FLOW_SETPT < 0.1)
+        EndIf
+
+      Else
+        'problem with BattVolt, irga_OFF, or valve_flow...disable the valve control
+        valveControl = 0
+        valve_flow_OK = false
+      EndIf
+
+      If valve_flow_OK Then
+        valve_status = "Valve flow is OK"
+      ElseIf (NOT BattVolt_OK) Then
+        valve_status = "ERROR: Valves are disabled - Check BattVolt"
+      ElseIf (irga_OFF) Then
+        valve_status = "ERROR: Valves are disabled - IRGA is OFF"
+      ElseIf (press_offset = 0) Then
+        valve_status = "ERROR: press_offset is zero - turn pump off and set DO_P_offset = true"'not likely to see this...valve turns off
+      ElseIf (valve_flow = NAN) Then
+        valve_status = "ERROR: Valve flow is NAN"
+      ElseIf (NOT buff_depth_OK) Then
+        valve_status = "ERROR: Valve flow is not at setpoint - Check buff_depth"
+      Else
+        valve_status = "ERROR: Valve flow is not at setpoint"
+      EndIf
+      'end of code for nonzero valve_number
+    Else
+      'valve_number is 0, so these variables are not relevant
+      valve_flow = 0
+      valveControl = 0
+      valve_flow_OK = TRUE
+
+      If  valveTctl_ON Then
+        'valve temperature control is on...so check the temperature
+        If (valve_tmpr < ValveOKMinTemp) Then
+          valve_status = "Valves are too cold"
+        ElseIf (valve_tmpr > ValveOKMaxTemp) Then
+          valve_status = "Valves are too warm"
+        ElseIf NOT ((valve_tmpr >= ValveOKMinTemp) AND (valve_tmpr <= ValveOKMaxTemp)) Then
+          valve_status = "Valve temperature problem" 'valve_tmpr could be NAN...
+
+          #If SCRUB_MODULE Then
+        ElseIf (scrub_tmpr < ScrubOKMinTemp) Then
+          valve_status = "Scrub module is too cold"
+        ElseIf (scrub_tmpr > ScrubOKMaxTemp) Then
+          valve_status = "Scrub module is too warm"
+        ElseIf NOT ((scrub_tmpr >= ScrubOKMinTemp) AND (scrub_tmpr <= ScrubOKMaxTemp)) Then
+          valve_status = "Scrub module temperature problem" 'scrub_tmpr could be NAN...
+          #EndIf 'SCRUB_MODULE
+
+        Else
+          valve_status = "Valves are ready" 'ahhhh...the Goldilocks zone.
+        EndIf
+        'end of if valve temperature control is on
+      Else
+        'valve temperature control is off
+        valve_status = "Valves are in standby mode (temperature control is disabled)"
+      EndIf
+
+    EndIf 'end of code for valve_number = 0
+
+    PWM (valveControl,5,200,uSec) 'drive the proportional control valve.
+
+    #Else 'end of #if VALVE_MODULE to do flow control
+    valve_status = "Program not configured for valve operation - Set VALVE_MODULE = True and recompile"
+    #EndIf 'end of #if not VALVE_MODULE
+
+
+    'Set CPEC200 diagnostic bits in a temporary variable - mask it later after EC_mode is defined
+    diag_cpec_tmp = 0
+    If (NOT BattVolt_OK)   Then diag_cpec_tmp += Bit(9)
+    If (NOT irga_OK)       Then diag_cpec_tmp += Bit(8)
+    If (NOT sonic_OK)      Then diag_cpec_tmp += Bit(7)
+    If (NOT pump_flow_OK)  Then diag_cpec_tmp += Bit(6)
+    If (NOT pump_tmpr_OK)  Then diag_cpec_tmp += Bit(5)
+    If (NOT buff_depth_OK) Then diag_cpec_tmp += Bit(4)
+
+    #If VALVE_MODULE Then
+    If (NOT valve_flow_OK) Then diag_cpec_tmp += Bit(3)
+    If (NOT valve_tmprOK) Then diag_cpec_tmp += Bit(2)
+    #If SCRUB_MODULE Then
+    If (NOT scrub_tmprOK) Then diag_cpec_tmp += Bit(1)
+    #EndIf 'end of #if SCRUB_MODULE
+    #EndIf 'end of #if VALVE_MODULE
+
+
+    #If VALVE_MODULE Then '-----------------------valve sequence control-----------------------------------
+
+    'Look for conditions where SequenceStep can change the value of valve_mode before we process this scan
+    If (valve_mode = StartUp) AND (SequenceStep > 0) Then
+      'This is the signal from TimedControl that it has started the sequence
+      valve_mode = CalActive
+      SequenceStep_prev = 0
+      DO_P_offset = true
+      WriteMessage("Zero/Span sequence started")
+    EndIf
+
+
+    'set variables that depend on valve_mode
+    Select Case valve_mode
+    Case Is = Manual
+      'we are in "EC mode" if the pump is ON
+      If pump_ON Then
+        EC_mode = true
+        mode_status = "Normal EC mode"
+        diag_cpec =  diag_cpec_tmp AND EC_diag_mask
+      Else
+        EC_mode = false
+        mode_status = "Manual Zero/Span mode"
+        diag_cpec = diag_cpec_tmp AND Not_EC_diag_mask
+      EndIf
+
+      NewStep = false
+      smpl_counter = 0
+      'leave OmitCounts, SetZeroSpanCounts, SequenceStep_out, valve_out as is...not relevant here
+      'valve_number is set manually  - leave it as is
+      end_omit = false
+      'DO_zero, DO_CO2_span, and DO_H2O_span are set manually, so do nothing here
+
+      'end of case valve_mode = Manual
+    Case Is = StartUp
+      EC_mode = FALSE
+      mode_status = "Starting Zero/Span sequence"
+      diag_cpec = diag_cpec_tmp AND Not_EC_diag_mask
+
+      NewStep = false
+      smpl_counter = 0
+      'leave OmitCounts, SetZeroSpanCounts, SequenceStep_out, valve_out as is...not relevant here
+      valve_number = CalSequence(1)
+      end_omit = false
+      DO_zero = false
+      DO_CO2_span = false
+      DO_H2O_span = FALSE
+
+      'end of case valve_mode = Startup
+    Case Is = CalActive
+      EC_mode = FALSE
+      diag_cpec = diag_cpec_tmp AND Not_EC_diag_mask
+
+      If (SequenceStep = SequenceStep_prev) Then
+        'just another sample at the same step of the sequence
+        NewStep = false
+        smpl_counter += 1 'increment number of samples at this step
+        'leave OmitCounts, SetZeroSpanCounts, SequenceStep_out, valve_out as is
+
+      Else 'TimedControl has moved to the next step in the sequence
+        mode_status = SequenceStepText(SequenceStep)
+        NewStep = True
+        smpl_counter = 1  'restart the counter
+        OmitCounts = Tmd_Ctl(SequenceStep,TC_counts)-BLOCK_MEAN_LENGTH
+        If OmitCounts < 0 Then OmitCounts = 9999 ' omit all the data
+        SetZeroSpanCounts = OmitCounts - COUNTS_TO_SET_ZERO
+
+        SequenceStep_out = SequenceStep_prev
+        valve_out = valve_number 'this is the previous value...haven't updated it yet in this scan
+
+      EndIf 'end of if sequencestep has changed
+
+      valve_number = CalSequence(SequenceStep) 'SequenceStep is determined by Timedcontrol()
+      end_omit = (smpl_counter > OmitCounts)  'true if we have waited long enough after a valve swtich to equilibrate
+
+      'decide if it is time to set the zero or span
+      DO_zero = SET_ZERO AND (SequenceStep = 4) AND (smpl_counter = SetZeroSpanCounts)
+      If DO_zero Then
+        If (NOT (diag_cpec = 0)) Then
+          DO_zero = false
+          writemessage("ERROR: Automatic Zero aborted - Check diagnostics")
+        EndIf
+      EndIf
+
+      DO_CO2_span = SET_SPAN_1 AND (SequenceStep = 6) AND (smpl_counter = SetZeroSpanCounts)
+      If DO_CO2_span Then
+        If (NOT (diag_cpec = 0)) Then
+          DO_CO2_span = false
+          writemessage("ERROR: Automatic CO2 Span aborted - Check diagnostics")
+        EndIf
+      EndIf
+
+      DO_H2O_span = FALSE 'H2O span is not included in automatic sequence - must be done manually
+
+      'end of case valve_mode = CalActive
+    EndSelect'end of select case valve_mode to assign valve_number and OmitCounts, etc.
+
+    ' end of #if VALVE_MODULE
+    #Else
+    'no VALVE_MODULE
+
+    If pump_ON Then
+      EC_mode = true
+      mode_status = "Normal EC mode"
+      diag_cpec =  diag_cpec_tmp AND EC_diag_mask
+    Else
+      EC_mode = false
+      mode_status = "Standby mode (Pump is Off)"
+      diag_cpec = diag_cpec_tmp AND Not_EC_diag_mask
+    EndIf
+
+    #EndIf 'end of #if no VALVE_MODULE
+
+
+    'see if it is time to trigger output
+    'time is in integer seconds, so this will be true for a whole second
+    'the inhibit prevents multiple triggers during the second
+    If EC_mode Then
+      If (output_MODtime = 0) Then
+        'start of new output interval - time to write results for previous interval
+        If NOT cov_trigger_inhibit Then
+          flux_trigger = true
+          cov_trigger = true
+          fast_trigger = true
+          slow_trigger = true
+          'note: these triggers get reset when we confirm table output
+        EndIf
+        cov_trigger_inhibit = true 'inhibit the output trigger for the rest of this second
+      Else
+        'not time to output results - reset the inhibit
+        cov_trigger_inhibit = false
+      EndIf
+      'end of if EC mode
+    Else
+      'not EC mode
+      'output trigger is based on either start/stop EC mode or advancing to a new zero/span sequence step
+      If EC_mode_prev Then
+        'we just stopped EC mode - output what we have so far, even though it is not the end of the interval
+        If flux_trigger Then
+          'do nothing...must have triggered based on time, and we are not done yet...don't trigger again
+        Else
+          If NOT flux_inhibit Then
+
+            'go ahead with the trigger
+            flux_trigger = true
+            cov_trigger = true
+            fast_trigger = true
+            slow_trigger = true
+          EndIf
+        EndIf
+      ElseIf (NewStep AND end_omit_prev) Then
+        'it is a new step in the zero/span sequence, and we have data from the previous step - output the previous step
+        zsp_trigger = true
+        fast_trigger = true
+        slow_trigger = true
+      EndIf
+    EndIf 'end of if not EC_mode
+
+    FastAvgDisable = (NOT (end_omit OR EC_mode))
+
+
+    If (diag_cpec = 0) Then
+      cpec_status = "CPEC is OK"
+    ElseIf ((diag_cpec AND Bit(9)) > 0) Then
+      If BattVolt > BATT_LOWLIMIT Then
+        cpec_status = "ERROR: Battery voltage is in deadband"
+      Else
+        cpec_status = "ERROR: Battery voltage is too low"
+      EndIf
+    ElseIf ((diag_cpec AND Bit(8)) > 0) Then
+      cpec_status = "ERROR: IRGA problem"
+    ElseIf ((diag_cpec AND Bit(7)) > 0) Then
+      cpec_status = "ERROR: Sonic problem"
+    ElseIf ((diag_cpec AND Bit(6)) > 0) Then
+      cpec_status = "ERROR: Pump flow problem"
+    ElseIf ((diag_cpec AND Bit(5)) > 0) Then
+      cpec_status = "ERROR: Pump temperature problem" 'will mostly see "pump flow problem" instead of this...
+    ElseIf ((diag_cpec AND Bit(4)) > 0) Then
+      cpec_status = "WARNING: Buffer depth too large"
+    ElseIf ((diag_cpec AND Bit(3)) > 0) Then
+      cpec_status = "ERROR: Valve flow problem"
+    ElseIf ((diag_cpec AND Bit(2)) > 0) Then
+      cpec_status = "ERROR: Valve temperature problem"
+    ElseIf ((diag_cpec AND Bit(1)) > 0) Then
+      cpec_status = "ERROR: Scrub module temperature problem"
+    EndIf
+
+
+    'temperature control for valve module, pump module, and scrub module
+    SDMCD16Mask (ControlBits,mask_manual_control,2)
+
+
+    '************************************* output tables and processing **********************************
+
+    CallTable ts_data_300m 'Always save raw time series data.
+
+    CallTable FastAverages_300m 'temporary hidden table for statistics from main (fast) scan
+    If FastAverages_300m.output(1,1) Then
+      'if it was triggered for output this scan, then get the record to put it in Flux or Zero_Span table
+      GetRecord (fast_avg_out,FastAverages_300m,1)
+      fast_trigger = false
+      fast_done = true
+
+      pump_ON_Avg *= -1.0  'change sign so 0 means always off; 1 means always on.
+
+    EndIf 'end of if FastAverages were output
+
+
+    '---------------------------- lag the data for flux processing ---------------------------------------
+    'store raw sonic and irga data in temporary hidden tables so we can lag them
+    'do this whether we use the data or not, to keep the buffer full
+    CallTable sonic_LagBuffer_300m
+    CallTable irga_LagBuffer_300m
+    CallTable pump_LagBuffer_300m
+
+    'Reload sonic data with appropriate lag
+    GetRecord (dly_data_tmp(1),Sonic_LagBuffer_300m,sonic_RecsBack)
+    Move (sonic_lagged(1),5,dly_data_tmp(1),5)
+
+    'Reload irga data with appropriate lag
+    GetRecord (dly_data_tmp(1),irga_LagBuffer_300m,irga_RecsBack)
+    Move (irga_lagged(1),6,dly_data_tmp(1),6)
+
+    'Reload pump data with appropriate lag
+    GetRecord (dly_data_tmp(1),pump_LagBuffer_300m,pump_RecsBack)
+    Move (pump_lagged(1),2,dly_data_tmp(1),2)
+
+    'sds: call table for realtime display of lagged data, to make sure it looks right
+    '    CallTable TS_lagged
+
+    'Compute corrected air temperature from sonic temperature and EC155 H2O concentration
+    Tc_L = ((Ts_L+273.15) /(1+0.32*H2O_L/(1000+H2O_L)))-273.15 'Kaimal and Gaynor (1991) Eq. (3).
+
+    'Load the arrays that hold the input data for the covariance instructions.
+    cov_array(1,1) = Ts_L
+    cov_array(2,1) = CO2_L
+    cov_array(3,1) = H2O_L
+    cov_array(4,1) = Tc_L
+    Move (cov_array(1,2),3,Ux_L,3)
+    Move (cov_array(2,2),3,Ux_L,3)
+    Move (cov_array(3,2),3,Ux_L,3)
+    Move (cov_array(4,2),3,Ux_L,3)
+
+    If EC_mode Then
+      flux_disable_f = (irga_BAD_L OR sonic_BAD_L OR pump_flow_BAD_L)
+    Else
+      'set all of the disables used in the comp_cov table
+      'this is in case we just stopped EC_mode and cov_trigger will cause us to call the table
+      sonic_BAD_L = true
+      irga_BAD_L = true
+      pump_flow_BAD_L = true
+      flux_disable_f = true
+    EndIf
+
+    If (EC_mode OR cov_trigger) Then
+
+      CallTable comp_cov_300m 'compute covariances
+
+      If ( comp_cov_300m.Output(1,1) ) Then
+        'end of averaging period - get the covariance data and do the final processing
+        GetRecord (cov_out(1),comp_cov_300m,1)
+
+        cov_trigger = false
+        cov_done = true
+
+        'Compute the standard deviations from the variances.
+        Ts_stdev =  SQR (Ts_stdev)
+        Ux_stdev =  SQR (Ux_stdev)
+        Uy_stdev =  SQR (Uy_stdev)
+        Uz_stdev =  SQR (Uz_stdev)
+        CO2_stdev = SQR (CO2_stdev)
+        H2O_stdev = SQR (H2O_stdev)
+        Tc_stdev =  SQR (Tc_stdev)
+
+        'Rotate the sonic RHC system so the negative x-axis points north.
+        wind_dir_compass = (360+SONIC_AZIMUTH-wind_dir_sonic) MOD 360
+
+        'Make the sonic wind direction fall between 0 to 180 degrees and 0 to -180 degrees.
+        If ( wind_dir_sonic > 180 ) Then ( wind_dir_sonic = wind_dir_sonic-360 )
+
+        'get the barometric pressure
+        If (USE_DIFF_PRESS) Then
+          'normal case - use the EC100 barometer (back out the differential P sensor)
+          amb_press_mean = cell_press_Avg - diff_press_Avg
+        Else
+          'maybe user has changed plumbing, so the EC100 does not measure barometric pressure
+          amb_press_mean = AMB_PRESS_NOMINAL
+        EndIf
+
+        'Compute factors to change CO2 and H2O from molar mixing ratio to mass density.
+        Tc_Kelvin = Tc_mean+273.15
+        factor_CO2 = 0.044*amb_press_mean /(R*Tc_Kelvin)
+        factor_H2O = 0.018*amb_press_mean /(R*Tc_Kelvin)
+
+        rho_d_mean = (amb_press_mean /(RD*Tc_Kelvin)) * (1 - (H2O_Lag_Avg/(1000+H2O_Lag_Avg)))
+        rho_v_mean = (amb_press_mean /(RV*Tc_Kelvin)) *      (H2O_Lag_Avg/(1000+H2O_Lag_Avg))
+        rho_a_mean = (rho_d_mean+rho_v_mean)/1000
+
+        CalculateDewpoint(H2O_Lag_Avg, cell_press_Lag_Avg, Td_cell_mean)
+        CalculateDewpoint(H2O_Lag_Avg, amb_press_mean, Td_ambient_mean)
+
+        'Compute online fluxes.
+        tau = SQR ((Ux_Uz_cov*Ux_Uz_cov)+(Uy_Uz_cov*Uy_Uz_cov))
+        u_star = SQR (tau)
+        tau = rho_a_mean*tau
+        Fc = CO2_Uz_cov*factor_CO2
+        LE = LV*H2O_Uz_cov*factor_H2O
+        Hs = rho_a_mean*CP*Ts_Uz_cov  'sonic sensible heat flux using sonic temperature.
+        Hc = rho_a_mean*CP*Tc_Uz_cov  'Sensible heat flux using sonic temperature corrected for water vapor measured by the EC155.
+
+      EndIf 'end of if we sensed output in comp_cov
+    EndIf 'end of if we called comp_cov
+
+
+    'deal with sending configuration commands to the EC100 AFTER calling output tables
+    If (no_irga_data OR (waiting_for_save > 0)) Then
+      'do nothing
+    Else
+      If ((NOT BattVolt_OK) AND (NOT irga_OFF)) Then
+        ec155_power_f = TRUE
+        power_array(1,2) = 1
+        WriteMessage("ERROR: Powering OFF EC155 gas head")
+        Call Config_EC100 (power_array,1,ec155_power_f)
+        waiting_for_save = 10
+
+      ElseIf (irga_OFF AND BattVolt_OK AND (NOT irga_tmpr_BAD)) Then
+        ec155_power_f = TRUE
+        power_array(1,2) = 0
+        WriteMessage("Powering ON EC155 gas head")
+        Call Config_EC100 (power_array,1,ec155_power_f)
+        waiting_for_save = 10
+
+      ElseIf ( configure_ec100_f ) Then
+        'either program startup or we are back after having no irga data for a while
+        config_array(1,1) = 0
+        config_array(1,2) = BANDWIDTH
+        config_array(2,1) = 3
+        If USE_DIFF_PRESS Then config_array(2,2) = 1 Else config_array(2,2) = 0
+        writemessage("Configuring the EC100")
+        Call Config_EC100 (config_array(1,1),2,configure_ec100_f)
+
+        #If VALVE_MODULE Then
+      ElseIf ( DO_zero ) Then
+        config_array(1,1) = 11
+        config_array(1,2) = 1
+        writemessage("Setting the zero")
+        Call Config_EC100 (config_array,1,DO_zero)
+
+      ElseIf ( DO_CO2_span) Then
+        config_array(1,1) = 12
+        config_array(1,2) = CO2_SPAN_PPM
+        config_array(2,1) = 11
+        config_array(2,2) = 2
+        writemessage("Setting the CO2 span")
+        Call Config_EC100 (config_array,2,DO_CO2_span)
+
+      ElseIf ( DO_H2O_span) Then
+        config_array(1,1) = 13
+        config_array(1,2) = H2OSpanDewPt
+        config_array(2,1) = 11
+        config_array(2,2) = 3
+        writemessage("Setting the H2O span")
+        Call Config_EC100 (config_array,2,DO_H2O_span)
+        #EndIf 'VALVE_MODULE
+
+      EndIf 'end of list of conditions that may require a call to Config_EC100
+    EndIf
+
+ 
+    If pump_ON Then
+      If NOT pump_ON_prev Then writemessage("Pump turned ON")
+    Else
+      If pump_ON_prev Then writemessage("Pump turned OFF")
+    EndIf
+    pump_ON_prev = pump_ON
+
+
+    #If VALVE_MODULE Then
+    '------------------ Sampling System Control AFTER calling output tables ----------------------
+
+    SequenceStep_prev = SequenceStep 'for table output and to know when TimedControl has updated SequenceStep
+    If SequenceStep = (SEQUENCE_LENGTH - 1) Then
+      pump_ON = true 'turn pump on to let it stabilize
+      pump_ON_prev = true 'don't want to write the message as part of a normal sequence
+    EndIf
+
+    'Look For conditions that change the valve_mode
+    Select Case valve_mode
+    Case Is = Manual
+
+      If CHECK_ZERO Then 'CHECK_ZERO is an indicator that we want to do auto cal sequences
+        'see if it is time to start the sequence
+        If (cal_MODtime = cal_timeoffset_sec) Then STARTsequence = true
+      EndIf
+
+      If STARTsequence Then 'STARTsequence can also be set manually by user...
+        Start_the_Sequence_Now 'this will check for error conditions first...
+        If (valve_mode = StartUp) Then 'there were no errors in Start_the_Sequence_Now
+          TimedControl(SEQUENCE_LENGTH,0,msec,Tmd_Ctl(1,TC_bits),SequenceStep,Tmd_Ctl(),1)
+        EndIf 'else there were errors - do nothing
+        ' end of if STARTsequence
+      Else
+        ' this block of code is executed when the valves are in manual control mode -
+        ' the sequence not active, and we are not in startup mode, either
+
+        If ((valve_number <> None) AND (pump_ON = true)) Then
+          'we can't allow a valve and the pump at the same time
+          If EC_mode_prev Then
+            'user tried to turn on a valve, but the pump was already on
+            WriteMessage("Valve operation not allowed when pump is on")
+          Else
+            'user turned the pump on, but a valve was already on
+            WriteMessage("EC mode restarted by turning pump on")
+          EndIf
+          valve_number = None 'either way the pump takes precedence...turn the valve off
+        EndIf
+
+ 
+        If ((valve_number > None) AND DO_P_offset) Then
+          'either the user tried to turn on a valve while measureing press_offset,
+          'or he set DO_P_offset = true while a valve was on
+          valve_number = None
+          WriteMessage("Valves disabled to measure press_offset")
+        EndIf
+
+
+        If ((valve_number > None) AND (NOT valve_tmprOK)) Then
+          'user tried to turn on a valve, but the temperature in not in range
+          valve_number = None
+          WriteMessage("ERROR: Valves disabled - Check valve temperature")
+        EndIf
+
+        If ((valve_number > None) AND (press_offset = 0.0)) Then
+          'user tried to turn on a valve, but we have not measured the pressure offset
+          valve_number = None
+          WriteMessage("ERROR: Valves disabled - Check press_offset")
+        EndIf
+
+        #If SCRUB_MODULE Then
+        If ((valve_number = ZeroAir) AND (NOT scrub_tmprOK)) Then
+          'user tried to use the scrub module, but the temperature is not in range
+          valve_number = None
+          WriteMessage("ERROR: Valves disabled - Check scrub module temperature")
+        EndIf
+        #EndIf 'end of #if SCRUB_MODULE
+
+        If valve_number > None Then
+          'take care of manual valve control
+          Tmd_Ctl(1,TC_bits) = Bit(valve_number)
+          #If SCRUB_MODULE Then 'turn on scrub module pump if zero air is selected
+          If valve_number = ZeroAir Then Tmd_Ctl(1,TC_bits) = Bit(1) + Bit(11)
+          #EndIf 'end of #if SCRUB_MODULE
+        Else
+          'all valves off
+          Tmd_Ctl(1,TC_bits) = 0
+        EndIf
+
+        Tmd_Ctl(1,TC_counts) = 1
+
+      EndIf 'end of not STARTsequence
+      'end of case valve_mode = Manual
+
+    Case Is = StartUp
+      If pump_ON Then
+        'user has turned pump on...abort the sequence
+        Stop_the_Sequence_Now  'stop the sequence now, with all valves off
+        TimedControl (1,0,msec,0,SequenceStep,Tmd_Ctl(),1)
+        WriteMessage("Zero/Span startup manually aborted by turning pump on")
+
+      Else 'user has not turned the pump on...proceed
+        If valve_tmprOK Then
+
+          #If SCRUB_MODULE Then
+          If scrub_tmprOK Then
+            STARTsequence = true
+          Else
+            Stop_the_Sequence_Now  'stop the sequence now, with all valves off
+            TimedControl(1,0,msec,0,SequenceStep,Tmd_Ctl(),1)
+            WriteMessage("ERROR: Zero/Span startup aborted - Check scrub module temperature")
+          EndIf
+          #Else 'end of #if SCRUB_MODULE
+
+          STARTsequence = true
+
+          #EndIf 'end of NOT #if SCRUB_MODULE
+          'end of valve temperature OK
+        Else
+          'valve temperature is not OK
+          Stop_the_Sequence_Now  'stop the sequence now, with all valves off
+          TimedControl(1,0,msec,0,SequenceStep,Tmd_Ctl(),1)
+          WriteMessage("ERROR: Zero/Span startup aborted - Check valve temperature")
+        EndIf 'end of valve temperature not OK
+
+      EndIf 'end of if user has not turned pump on
+      'end of case valve_mode = StartUp
+
+
+    Case Is = CalActive 'sequence is active
+      If (pump_ON AND (SequenceStep < (SEQUENCE_LENGTH - 1))) Then 'user has turned pump on...abort the sequence
+        Stop_the_Sequence_Now  'stop the sequence now, with all valves off
+        TimedControl(1,0,msec,0,SequenceStep,Tmd_Ctl(),1)
+        WriteMessage("Zero/Span sequence manually aborted by turning pump on")
+
+      ElseIf (SequenceStep = SEQUENCE_LENGTH) Then
+        Stop_the_Sequence_Now  'stop the sequence now, with all valves off
+        TimedControl(1,0,msec,0,SequenceStep,Tmd_Ctl(),1)
+        WriteMessage("Zero/Span sequence completed")
+
+      Else 'proceed with sequence
+
+        If valve_tmprOK Then
+          #If SCRUB_MODULE Then
+          If scrub_tmprOK Then
+            STARTsequence = false 'reset this in case the user set it...can't start it when it already running
+          Else
+            Stop_the_Sequence_Now  'stop the sequence now, with all valves off
+            TimedControl(1,0,msec,0,SequenceStep,Tmd_Ctl(),1)
+            WriteMessage("ERROR: Zero/Span sequence aborted - Check scrub module temperature")
+          EndIf
+          #Else 'end of #if SCRUB_MODULE
+          STARTsequence = false 'reset this in case the user set it...can't start it when it already running
+          #EndIf 'end of NOT #if SCRUB_MODULE
+          'end of valve temperature OK
+
+        Else
+          'valve module temperature is out of range
+          Stop_the_Sequence_Now  'stop the sequence now, with all valves off
+          TimedControl(1,0,msec,0,SequenceStep,Tmd_Ctl(),1)
+          WriteMessage("ERROR: Zero/Span sequence aborted - Check valve temperature")
+
+        EndIf 'end of valve temperature not OK
+      EndIf 'end of if proceeding with sequence
+      'end of case valve_mode = CalActive
+    EndSelect 'end of select case valve_mode
+
+    #EndIf 'end of #if VALVE_MODULE
+
+    EC_mode_prev = EC_mode
+    end_omit_prev = end_omit 'allows us to avoid saving data when there are no samples in previous zero/span sequence step
+
+  NextScan 'end of main (fast) scan
+
+
+  '*********************************** start slow sequence ********************************************
+  SlowSequence
+
+
+  Scan (SLOW_INTERVAL,Sec,3,0)
+    
+
+    'do the slow measurements for standard CPEC200 system
+    PanelTemp (panel_tmpr,250) 'Datalogger panel temperature.
+    Battery (BattVolt)
+
+
+    'CNR4 Net Radiometer measurements 'ShortUp', 'ShortDn', 'LongUp', and 'LongDn'
+    VoltDiff(CNR4(1),4,mV20C,1,True,0,_60Hz,CNR4Mult(),0)
+    'CNR4 thermistor measurement 'CNR4TC'
+   Resistance(CNR4TC,1,mV200,5,Ix1,1,1675,True,True,0,_60Hz,1.0,0)
+    CNR4TC=CNR4TC/100
+    PRT(CNR4TC,1,CNR4TC,1,0)
+
+    'Calculate Kelvin temperature of CNR4
+    CNR4TK=CNR4TC+273.15
+    'Calculate temperature corrected long-wave radiation
+    LongUpCo=LongUp+5.67e-8*CNR4TK^4
+    LongDnCo=LongDn+5.67e-8*CNR4TK^4
+    'Calculate short-wave net radiation
+    Short_R_Net=ShortUp-ShortDn
+    'Calculate long-wave net radiation
+    Long_R_Net=LongUp-LongDn
+    'Calculate albedo
+    Albedo=ShortDn/ShortUp
+    'Calculate net radiation
+    Total_Net_R=Short_R_Net+Long_R_Net
+
+
+    VoltSe (pump_tmpr_volts, 1,mV5000,16,TRUE,450,250,1,0)
+
+    'do slow measurements for CPEC200 options and accessories
+    #If VALVE_MODULE Then
+    #If SCRUB_MODULE Then
+    VoltSe (scrub_press,   1,mV5000,17,TRUE,0,250,0.02222222,-4.444444)
+    VoltSe (scrub_tmpr_volts,1,mV5000,18,TRUE,450,250,1,0)
+    #EndIf 'SCRUB_MODULE
+    VoltSe (valve_tmpr_volts,1,mV5000,19,TRUE,450,250,1,0)
+    #EndIf 'VALVE_MODULE
+
+    #If Leaf_Wetness_Sensor Then
+    BrHalf (leaf_wetness,1,mV5000C,20,Vx1,1,3000,false,10000,250,3000,0) 'measure leaf wetness sensor
+    #EndIf 'leaf wetness sensor
+
+    'add measurements for energy balance sensors here
+
+    process_slow_cpec 'do processing of slow measurements that is in common with the initilization scan
+
+    'set the heater and fan control bits for the SDM-CD16S
+    ControlBits = 0
+    If BattVolt_OK Then
+      'battery voltage is OK - do normal control
+      If pump_heat_ON  Then ControlBits += Bit(9)
+      If pump_fan_ON   Then ControlBits += Bit(10)
+      #If VALVE_MODULE Then
+      If valveHeat_ON Then ControlBits += Bit(7)
+      If valveFan_ON  Then ControlBits += Bit(8)
+      #If SCRUB_MODULE Then
+      If scrubHeat_ON Then ControlBits += Bit(12)
+      If scrubFan_ON  Then ControlBits += Bit(13)
+      #EndIf 'end of #if SCRUB_MODULE
+      #EndIf 'end of #if VALVE_MODULE
+      'note: 1-6 are valves, 11 is scrub pump, 14-16 are not used
+
+    Else
+      'disable heaters and fans if the battery voltage is too low
+      pump_heat_ON = false
+      pump_fan_ON = false
+      #If VALVE_MODULE Then
+      valveHeat_ON = false
+      valveFan_ON  = false
+      #If SCRUB_MODULE Then
+      scrubHeat_ON  = false
+      scrubFan_ON = false
+      #EndIf 'end of #if SCRUB_MODULE
+      #EndIf 'end of #if VALVE_MODULE
+    EndIf 'end of if BattVolt_OK is not true
+
+
+    #If VALVE_MODULE Then
+    'decide if it it time to enable valve and scrub temperature control
+    If CHECK_ZERO Then 'CHECK_ZERO is an indicator that we want to do auto cal sequences
+
+      valve_Tctl_offset = 60*((CAL_TIMEOFFSET - valve_warmup_time + CAL_INTERVAL) MOD CAL_INTERVAL)
+
+      If valve_Tctl_offset > cal_timeoffset_sec Then
+        If ((cal_MODtime >= valve_Tctl_offset) OR (cal_MODtime < cal_timeoffset_sec)) Then valveTctl_ON = true
+      Else
+        If ((cal_MODtime >= valve_Tctl_offset) AND (cal_MODtime < cal_timeoffset_sec)) Then valveTctl_ON = true
+      EndIf
+
+    EndIf
+    #EndIf 'end of #if VALVE_MODULE
+
+    'update the count-down timer for when we power the irga up or down
+    If waiting_for_save > 0 Then waiting_for_save = waiting_for_save - SLOW_INTERVAL
+    If waiting_for_save < 0 Then waiting_for_save = 0
+
+    CallTable SlowAverages_300m
+
+    If SlowAverages_300m.output(1,1) Then
+      GetRecord (slow_avg_out,SlowAverages_300m,1)
+
+      slow_trigger = false
+      slow_done = true
+
+      'multiply values that are averages of booleans by -1, so that 0 still means false, but now +1 means true
+      '...and because it is an average it is the fraction of time it was true (from 0 to 1)
+      PumpTmprOK_Avg *= -1.0
+      pump_heat_Avg *= -1.0
+      pump_fan_Avg *= -1.0
+
+      BattVoltOK_Avg *= -1.0
+
+      ValveTmprOK_Avg *= -1.0
+      valve_heat_Avg *= -1.0
+      valve_fan_Avg *= -1.0
+
+      ScrubTmprOK_Avg *= -1.0
+      scrub_heat_Avg *= -1.0
+      scrub_fan_Avg *= -1.0
+
+    EndIf 'end of if SlowAverages were output
+
+    If flux_inhibit Then
+      flux_inhibit = false
+    Else
+      If flux_trigger Then 'we want to output to the flux table
+        If (cov_done AND fast_done AND slow_done) Then 'all of the pieces are now ready
+          CallTable Flux_300m
+          flux_trigger = false
+          cov_done = false
+          fast_done = false
+          slow_done = false
+          flux_inhibit = true 'prevent consectutive calls to flux table
+        EndIf
+      EndIf 'flux_trigger
+    EndIf 'not flux_inhibit
+
+    #If VALVE_MODULE Then
+    If zsp_trigger Then 'we want to output to the Zero_Span table
+      If (fast_done AND slow_done) Then 'all of the pieces are now ready
+        CallTable Zero_Span_300m
+        zsp_trigger = false
+        fast_done = false
+        slow_done = false
+      EndIf
+    EndIf
+    #EndIf 'end of #if VALVE_MODULE
+
+
+    If config_done_today Then
+      'wait until just after midnight to reset the flag
+      If (sec_since_midnight < config_timeoffset_sec) Then
+        config_done_today = false
+      EndIf
+    Else
+      'wait for time to output the config history
+      If (sec_since_midnight >= config_timeoffset_sec) Then
+        CallTable(config_history_300m)
+        config_done_today = true 'don't do it again today
+      EndIf
+    EndIf
+
+  NextScan 'end of slow scan
+
+
+
+
+
+EndProg
+

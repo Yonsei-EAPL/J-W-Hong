@@ -1,0 +1,802 @@
+'CR3000 Series Datalogger
+'Copyright (c) 2002, 2006, 2010 Campbell Scientific, Inc. All rights reserved.
+'19 Sep 16
+'version 1.1 by Jaeil Yoo(jiyoo@yonsei.ac.kr) for EAPL in Yonsei University
+'The following sensors are measured:
+'
+'Sensors (As of 19 Sep. 2016) ******************
+'CSAT3A(SN:1185)     three dimensional sonic anemometer(SDM_Add = 2)
+'LI7200RS(SN:72H-0802)     closed path infrared gas analyzer (CO2 and H2O)(SDM_Add = 3)
+'LI7700(SN:TG1-0367)     Open paht methane gas analzyer(CH4)(SDM_Add = 1)
+'HMP155(SN:J3730054)
+'CNR4(SN:)
+'Global CMP10(SN:140485)  with Solys2(SN:140067) 
+'Diffuse CMP10(SN:140486)
+  
+  
+
+' The sign convention for the fluxes is positive away from the surface and
+'negative towards the surface.
+'
+' Before computing online fluxes, the datalogger will introduce lags into the
+'eddy covariance data to account for the gas analyzer tube delay. The raw data
+'is not lagged.
+'
+' The site attendant must load in several constants and calibration values.
+'Search for the text string "unique" to find the locations where unique
+'constants and calibration values are entered.
+
+'*** Unit Definitions ***
+'Symbol   Units
+'C        Celsius
+'degrees  degrees (angle)
+'g        grams
+'J        Joules
+'kg       kilograms
+'kPa      kilopascals
+'m        meters
+'mg       milligrams
+'mmol     millimoles
+'mol      moles
+'s        seconds
+'umol     micromols
+'V        volts
+'W        Watts
+
+
+'*** Wiring ***
+'ANALOG INPUT
+'4H       CM3UP signal   
+'4L       CM3UP signal Reference
+'gnd        
+
+'5H       CM3DN signal            
+'5L       CM3DN signal Reference         
+'gnd        
+
+'6H       CG3UP signal            
+'6L       CG3UP signal Reference         
+'gnd        
+           
+'7H       CG3DN signal            
+'7L       CG3DN signal Reference         
+'gnd        
+
+'8H       CNR4 TC signal         
+'8L       CNR4 TC signal Reference         
+'gnd        
+          
+'9H         
+'9L         
+'gnd        
+
+'10H         
+'10L         
+'gnd        
+'           
+          
+          
+
+
+'VOLTAGE EXCITATION
+'Vx1        Leaf wetness sensor excitation (white)
+
+
+
+'SDM INPUT
+'SDM-C1     EC155 w/CSAT3A SDM Data (green)
+'           SDM-CD16S Data (green)
+'           LI7200 (blue)  160220 J-W
+'           LI7700 (blue)  160220 J-W
+'SDM-C2     EC155 w/CSAT3A SDM Clock (white)
+'           SDM-CD16S Clock (white)
+'           LI7200 (white)  160220 J-W
+'           LI7700 (blue)  160220 J-W
+'SDM-C3     EC155 w/CSAT3A SDM Enable (brown)
+'           SDM-CD16S Enable (brown)
+'           LI7200 (brown)  160220 J-W  
+'           LI7700 (blue)  160220 J-W
+'G          EC155 w/CSAT3A SDM reference (black)
+'           EC155 w/CSAT3A SDM shield (clear)
+
+'POWER IN
+'12V        datalogger (red)
+'G          datalogger (black)
+
+'POWER OUT
+'12V        SDM-CD816S power (red)
+'5V         Pump module thermistor excitation (orange)
+'           Valve module thermistor excitation (blue)
+'G          SDM-CD16S power reference (black)
+
+'EXTERNAL POWER SUPPLY
+'POS        CSAT3A/EC155 power (red)
+'           datalogger (red)
+'NEG        CSAT3A/EC155 power reference (black)
+'           CSAT3A/EC155 power shield (clear)
+'           datalogger (black)
+
+
+
+PipeLineMode
+
+Public TRef
+
+'variables for CNR4
+Public CNR4(11)
+Alias CNR4(1) = CM3Up
+Alias CNR4(2) = CM3Dn
+Alias CNR4(3) = CG3Up
+Alias CNR4(4) = CG3Dn
+Alias CNR4(5) = NetRs
+Alias CNR4(6) = NetRl
+Alias CNR4(7) = UpTot
+Alias CNR4(8) = DnTot
+Alias CNR4(9) = NetTot
+Alias CNR4(10) = CG3UpCo
+Alias CNR4(11) = CG3DnCo
+Units CNR4 = W/m^2
+
+Public CNR4TC
+Units CNR4TC = degC
+Public CNR4TK
+Units CNR4TK = K
+
+Public Albedo
+Units Albedo = arb
+
+Public global_solrad
+Units global_solrad = W/m^2
+Public diffused_solrad
+Units diffused_solrad = W/m^2
+
+'variables for HMP155
+Public T_air
+Public RH
+Units T_air = degree C
+Units RH = %
+
+
+'*** General constants and variables ***
+Const SCAN_INTERVAL = 100  'Measurement Rate 100 ms (10 Hz).
+Const OUTPUT_INTERVAL = 30 'Unique value, online flux data output interval in minutes.
+Const SDM_PER = 30         'Unique value, default SDM clock speed.
+
+Const OFFSET = 11                                                 'An offset delay that will be introduced to the eddy covariance data used to compute online fluxes.
+Const SCAN_BUFFER_SIZE = 60*INT (1000/SCAN_INTERVAL)              'Compute a 60 second scan buffer.
+Const NUM_DAY_CPU = 7                                             'Number of days of data to store on the CPU.
+Const FLUX_SIZE_CPU = Ceiling (NUM_DAY_CPU*1440)/OUTPUT_INTERVAL  'Size of flux data table on CPU [days].
+
+
+Const R = 8.3143e-3                                               'Universal gas constant [kPa m^3/(K mol)].
+Const RD = R/29                                                   'Gas constant for dry air [kPa m^3/(K g)].
+Const LV = 2440                                                   'Estimate of the latent heat of vaporization [J/g].
+Const RV = R/18                                                   'Gas constant for water vapor [kPa m^3/(K g)].
+
+Dim dly_data_out(20)                                               'Array used to temporarily store the lagged record.
+
+'Other measurements.
+Public panel_tmpr
+Public batt_volt
+Units panel_tmpr = C
+Units batt_volt = V
+
+'Program working variables.
+Dim scan_count As Long                                   'Number scans executed.
+Dim slowsequence_finished_f As Boolean                   'Flag used to indicate the SlowSequence has finished its scan.
+Dim slowsequence_disable_f As Boolean = TRUE             'Flag used to decimate statistics in main scan.
+
+'Dim buff_depth
+Dim i As Long
+Dim n = 1
+Units n = samples
+
+'*** Beginning of CSAT3(A) constants, variables, and working data table ***
+#If ( (SCAN_INTERVAL = 100) OR (SCAN_INTERVAL = 50 ) ) Then
+Const CSAT_OPT = INT (1000/SCAN_INTERVAL)  'Compute CSAT3 Execution Parameter.
+#EndIf
+#If ( SCAN_INTERVAL = 40 ) Then
+Const CSAT_OPT = 20                        'Use 20 Hz Execution Parameter with a 40 ms Scan Interval.
+#EndIf
+Const DELAY_CSAT3 = 2                      'Fixed CSAT3 delay.
+Const CSAT3_REC_BCK = OFFSET-DELAY_CSAT3   'Number of records back to align CSAT3 data.
+Const EC100_SDM_ADDR = 2                   'SDM Address for EC100
+
+
+Dim sonic_irga_raw(12)    
+Alias sonic_irga_raw(1) = Ux_raw
+Alias sonic_irga_raw(2) = Uy_raw
+Alias sonic_irga_raw(3) = Uz_raw
+Alias sonic_irga_raw(4) = Ts_raw
+Alias sonic_irga_raw(5) = diag_sonic_raw
+Alias sonic_irga_raw(6) = NotUsed1
+Alias sonic_irga_raw(7) = NotUsed2
+Alias sonic_irga_raw(8) = NotUsed3
+Alias sonic_irga_raw(9) = NotUsed4
+Alias sonic_irga_raw(10) = EC100_Press_raw
+Alias sonic_irga_raw(11) = NotUsed5
+Alias sonic_irga_raw(12) = NotUsed6
+
+Public sonic(5)
+Alias sonic(1) = Ux
+Alias sonic(2) = Uy
+Alias sonic(3) = Uz
+Alias sonic(4) = Ts
+Alias sonic(5) = diag_sonic
+Units Ux = m/s
+Units Uy = m/s
+Units Uz = m/s
+Units Ts = degC
+Units diag_sonic = arb
+
+Public wnd_dir_compass    
+
+
+Public diag_bits_sonic(4) As Boolean       'Sonic warning flags.
+Alias diag_bits_sonic(1) = amp_l_f         'Amplitude low warning flag.
+Alias diag_bits_sonic(2) = amp_h_f         'Amplitude high warning flag.
+Alias diag_bits_sonic(3) = sig_lck_f       'Poor signal lock warning flag.
+Alias diag_bits_sonic(4) = del_T_f         'Delta temperature warning flag.
+Units diag_bits_sonic = arb
+
+Const sonic_azimuth = 220                  'Unique Value
+'Units sonic_azimuth = degrees
+
+                 'CSAT3 and EC155 (not lagged).
+Const CP = 1004.67                         'Estimate of heat capacity of air [J/(kg K)].
+
+
+Dim diag_sonic_tmp As Long                 'Temporary variable used to break out the CSAT3(A) diagnostic bits.
+Dim mask_sonic As Long
+Dim sonic_disable_f As Boolean             'TRUE when CSAT3(A) diagnostic warning flags are on or CSAT3(A) has not sent data or an SDM signature error is reported.
+'Dim Ts_absolute                            'Sonic temperature (K).
+
+'*** End of CSAT3(A) constants, variables, and working data table ***
+
+
+'******************* variables for LI7200 **********************
+Const DELAY_LI7200 = 3			 'For now we only consider time delay from SMD LI7200(0.3sec).
+Const LI7200_SDM_ADDR = 3    'SDM Address for LI7700
+Const LI7200_REC_BCK = OFFSET - DELAY_LI7200	'???  'Number of records back to align 7200 data.
+
+Public li7200_raw(10)
+Alias li7200_raw(1) = li7200_co2_m_raw
+Alias li7200_raw(2) = li7200_h2o_m_raw
+Alias li7200_raw(3) = li7200_co2_d_raw
+Alias li7200_raw(4) = li7200_h2o_d_raw
+Alias li7200_raw(5) = li7200_agc_raw
+Alias li7200_raw(6) = li7200_Ptot_raw
+Alias li7200_raw(7) = li7200_Tin_raw
+Alias li7200_raw(8) = li7200_Tout_raw
+Alias li7200_raw(9) = li7200_Tavg_raw
+Alias li7200_raw(10)= li7200_diag_raw
+
+
+Public li7200_arr(10)
+Alias li7200_arr(1) = li7200_co2_m
+Alias li7200_arr(2) = li7200_h2o_m
+Alias li7200_arr(3) = li7200_co2_d
+Alias li7200_arr(4) = li7200_h2o_d
+Alias li7200_arr(5) = li7200_agc
+Alias li7200_arr(6) = li7200_Ptot
+Alias li7200_arr(7) = li7200_Tin
+Alias li7200_arr(8) = li7200_Tout
+Alias li7200_arr(9) = li7200_Tavg
+Alias li7200_arr(10)= li7200_diag
+Units li7200_co2_m = umol/mol
+Units li7200_h2o_m = mmol/mol
+Units li7200_co2_d = mmol/m3
+Units li7200_h2o_d = mmol/m3
+Units li7200_agc = %
+Units li7200_Ptot = kPa
+Units li7200_Tin = degC
+Units li7200_Tout = degC
+Units li7200_Tavg = degC
+Units li7200_diag = arb
+
+Dim cov_array_li7200(1,6)                'Arrays used to hold the input data for the covariance instructions (EC150 and CSAT3A sonic head).
+Dim cov_out_li7200(25)                          'EC150 statistics.
+Alias cov_out_li7200(1) = ux_stdev
+Alias cov_out_li7200(2) = ux_uy_cov
+Alias cov_out_li7200(3) = ux_uz_cov
+Alias cov_out_li7200(4) = ux_Ts_cov
+Alias cov_out_li7200(5) = ux_co2_cov
+Alias cov_out_li7200(6) = ux_h2o_cov
+Alias cov_out_li7200(7) = uy_stdev
+Alias cov_out_li7200(8) = uy_uz_cov
+Alias cov_out_li7200(9) = uy_Ts_cov
+Alias cov_out_li7200(10) = uy_co2_cov
+Alias cov_out_li7200(11) = uy_h2o_cov
+Alias cov_out_li7200(12) = uz_stdev
+Alias cov_out_li7200(13) = uz_Ts_cov
+Alias cov_out_li7200(14) = uz_co2_cov
+Alias cov_out_li7200(15) = uz_h2o_cov
+Alias cov_out_li7200(16) = Ts_stdev
+Alias cov_out_li7200(17) = Ts_co2_cov
+Alias cov_out_li7200(18) = Ts_h2o_cov
+Alias cov_out_li7200(19) = co2_stdev
+Alias cov_out_li7200(20) = co2_h2o_cov
+Alias cov_out_li7200(21) = h2o_stdev
+Alias cov_out_li7200(22) = windspeed
+Alias cov_out_li7200(23) = rslt_windspeed
+Alias cov_out_li7200(24) = wnd_dir_sonic
+Alias cov_out_li7200(25) = wnd_dir_stdev
+Units cov_out_li7200 = (m/s)^2
+Units ux_stdev = m/s
+Units uy_stdev = m/s
+Units uz_stdev = m/s
+Units Ts_stdev = degC
+Units co2_stdev = umol/mol
+Units h2o_stdev = mmol/mol
+Units ux_co2_cov = (m/s)(umol/mol)
+Units uy_co2_cov = (m/s)(umol/mol)
+Units uz_co2_cov = (m/s)(umol/mol)
+Units Ts_co2_cov = (C)(umol/mol)
+Units ux_h2o_cov = (m/s)(mmol/mol)
+Units uy_h2o_cov = (m/s)(mmol/mol)
+Units uz_h2o_cov = (m/s)(mmol/mol)
+Units Ts_h2o_cov = (C)(mmol/mol)
+Units ux_Ts_cov = (m/s)(C)
+Units uy_Ts_cov = (m/s)(C)
+Units uz_Ts_cov = (m/s)(C)
+Units co2_h2o_cov = (umol/mol)(mmol/mol)
+Units windspeed = m/s
+Units rslt_windspeed = m/s
+Units wnd_dir_sonic = degrees
+Units wnd_dir_stdev = degrees
+
+
+Public diag_bits_li7200(9) As Boolean      'LI7200 warning flags.
+Alias diag_bits_li7200(1) = sync_f         'Always OK, Not Used
+Alias diag_bits_li7200(2) = pll_f          'Phase Lock Loop (status of optical filter wheel) flag.
+Alias diag_bits_li7200(3) = detector_f     'detector temperature flag.
+Alias diag_bits_li7200(4) = chopper_f      'chopper temperature flag.
+Alias diag_bits_li7200(5) = press_f        'diff pressure sensor flag.
+Alias diag_bits_li7200(6) = Aux_in_f       'reference voltage warning flag.
+Alias diag_bits_li7200(7) = Tin_f          'T in demage flag.
+Alias diag_bits_li7200(8) = Tout_f         'T out damage flag.
+Alias diag_bits_li7200(9) = head_f         'head dectected flag.
+Units diag_bits_li7200 = arb
+
+Dim diag_li7200_tmp As Long                 'Temporary variable used to break out the LI7200 diagnostic bits.
+Dim mask_li7200 As Long
+
+Dim li7200_disable_f As Boolean             'TRUE when LI7200 diagnostic warning flags are on or LI7200 has not sent data or an SDM signature error is reported.
+Dim li7200_cov_disable_f As Boolean         'TRUE when LI7200 diagnostic warning flags OR CSAT3 diagnostic waring flags ON.
+'*******************end of Li7200 variables ********************
+
+'******************* variables for LI7700 **********************
+Const DELAY_LI7700 = 10  '1 second delay applied to LI7700
+Const LI7700_SDM_ADDR = 1 'SDM Address for LI7700
+Const LI7700_REC_BCK = OFFSET - DELAY_LI7700  
+
+Public li7700_raw(5)
+Alias li7700_raw(1) = li7700_ch4_d_raw
+Alias li7700_raw(2) = li7700_press_raw
+Alias li7700_raw(3) = li7700_temp_raw
+Alias li7700_raw(4) = li7700_diag_raw
+Alias li7700_raw(5) = li7700_rssi_raw
+
+Public li7700_arr(5)
+Alias li7700_arr(1) = li7700_ch4_d
+Alias li7700_arr(2) = li7700_press
+Alias li7700_arr(3) = li7700_temp
+Alias li7700_arr(4) = li7700_diag
+Alias li7700_arr(5) = li7700_rssi
+Units li7700_ch4_d = mmol/m3
+Units li7700_press = kPa
+Units li7700_temp = degC
+Units li7700_diag = arb
+Units li7700_rssi = %
+
+Dim cov_array_li7700(1,4)                'Arrays used to hold the input data for the covariance instructions (LI7700 and CSAT3A sonic head).
+Dim cov_out_li7700(4)                     
+Alias cov_out_li7700(1) = ch4_stdev       
+Alias cov_out_li7700(2) = ux_ch4_cov
+Alias cov_out_li7700(3) = uy_ch4_cov
+Alias cov_out_li7700(4) = uz_ch4_cov
+Units ch4_stdev = mmol/m^3
+Units ux_ch4_cov = mmol/(m^2 s)
+Units uy_ch4_cov = mmol/(m^2 s)
+Units uz_ch4_cov = mmol/(m^2 s)
+
+Public diag_bits_li7700(16) As Boolean      'LI7700 warning flags.
+Alias diag_bits_li7700(1) = boxconnected    'LI7550 Attached
+Alias diag_bits_li7700(2) = badauxtc3       'Bad thermocouple values
+Alias diag_bits_li7700(3) = badauxtc2       'Bad thermocouple values
+Alias diag_bits_li7700(4) = badauxtc1       'Bad thermocouple values
+Alias diag_bits_li7700(5) = motorfail       'mirror cleaner motor failure.
+Alias diag_bits_li7700(6) = calibrating     'calibration in process
+Alias diag_bits_li7700(7) = bot_heat_on     'lower mirror heater on
+Alias diag_bits_li7700(8) = top_heat_on     'upper mirror heater on
+Alias diag_bits_li7700(9) = pump_on         'pump motor running
+Alias diag_bits_li7700(10) = motor_spin     'mirror spin motor on
+Alias diag_bits_li7700(11) = block_t_unreg  'block temperature unregulated
+Alias diag_bits_li7700(12) = laser_t_unreg  'aser coller unregulated
+Alias diag_bits_li7700(13) = bad_temp       'optical path thermocouple failure
+Alias diag_bits_li7700(14) = ref_unlocked   'reference methane signal not locked
+Alias diag_bits_li7700(15) = no_signal      'no laser signal detected
+Alias diag_bits_li7700(16) = not_ready      'instrument is not ready
+Units diag_bits_li7700 = arb
+
+Dim diag_li7700_tmp As Long                 'Temporary variable used to break out the LI7200 diagnostic bits.
+Dim mask_li7700 As Long
+
+Dim li7700_disable_f As Boolean             'TRUE when LI7700 diagnostic warning flags are on or LI7200 has not sent data or an SDM signature error is reported.
+Dim li7700_cov_disable_f As Boolean         'TRUE when LI7700 diagnostic warning flags OR CSAT3 diagnostic waring flags ON.
+'*******************end of Li7700 variables ********************
+
+
+
+
+
+'***** Beginning of output data tables *****
+DataTable (flux,TRUE,FLUX_SIZE_CPU)
+  TableHide
+  DataInterval (0,OUTPUT_INTERVAL,Min,10)
+  CardOut (0,500000)
+  
+  'Beginning of CSAT3A sonic head output data 
+  Average (4,Ux,IEEE4,sonic_disable_f)
+  Average (4,li7200_co2_m,IEEE4,li7200_disable_f)
+  Average (4,li7200_Ptot,IEEE4,li7200_disable_f)
+  Average (3,li7700_ch4_d,IEEE4,li7700_disable_f)
+  Average (1,li7700_rssi,IEEE4,li7700_disable_f)
+  
+  Sample (25,ux_stdev,IEEE4)
+  Sample (4,ch4_stdev,IEEE4)
+  Sample (1,sonic_azimuth,IEEE4)
+  
+  Totalize (1,n,IEEE4,sonic_disable_f)
+  FieldNames ("sonic_samples_Tot")
+  Totalize (1,n,IEEE4,diag_sonic<>-1)
+  FieldNames ("no_sonic_head_Tot")
+  Totalize (1,n,IEEE4,diag_sonic<>NAN)
+  FieldNames ("no_new_sonic_data_Tot")
+  Totalize (1,n,IEEE4,amp_l_f IMP (diag_sonic=NAN))
+  FieldNames ("amp_l_f_Tot")
+  Totalize (1,n,IEEE4,amp_h_f IMP (diag_sonic=NAN))
+  FieldNames ("amp_h_f_Tot")
+  Totalize (1,n,IEEE4,sig_lck_f IMP (diag_sonic=NAN))
+  FieldNames ("sig_lck_f_Tot")
+  Totalize (1,n,IEEE4,del_T_f IMP (diag_sonic=NAN))
+  FieldNames ("del_T_f_Tot")
+  
+   Totalize (1,n,IEEE4,li7200_disable_f)
+  FieldNames ("LI7200_samples_Tot")
+  Totalize (1,n,IEEE4,sync_f IMP (li7200_diag=NAN))
+  FieldNames ("sync_f_Tot")
+  Totalize (1,n,IEEE4,pll_f IMP (li7200_diag=NAN))
+  FieldNames ("pll_f_Tot")
+  Totalize (1,n,IEEE4,detector_f IMP (li7200_diag=NAN))
+  FieldNames ("detector_f_Tot")
+  Totalize (1,n,IEEE4,chopper_f IMP (li7200_diag=NAN))
+  FieldNames ("chopper_f_Tot")
+  Totalize (1,n,IEEE4,press_f IMP (li7200_diag=NAN))
+  FieldNames ("press_f_Tot")
+  Totalize (1,n,IEEE4,Aux_in_f IMP (li7200_diag=NAN))
+  FieldNames ("Aux_in_f_Tot")
+  Totalize (1,n,IEEE4,Tin_f IMP (li7200_diag=NAN))
+  FieldNames ("Tin_f_Tot")
+  Totalize (1,n,IEEE4,Tout_f IMP (li7200_diag=NAN))
+  FieldNames ("Tout_f_Tot")
+  Totalize (1,n,IEEE4,head_f IMP (li7200_diag=NAN))
+  FieldNames ("head_f_Tot")
+  
+  Totalize (1,n,IEEE4,li7700_disable_f)
+  FieldNames ("LI7700_samples_Tot")
+  Totalize (1,n,IEEE4,boxconnected IMP (li7700_diag=NAN))
+  FieldNames ("boxconnected_Tot")
+  Totalize (1,n,IEEE4,badauxtc3 IMP (li7700_diag=NAN))
+  FieldNames ("badauxtc3_Tot")
+  Totalize (1,n,IEEE4,badauxtc2 IMP (li7700_diag=NAN))
+  FieldNames ("badauxtc2_Tot")
+  Totalize (1,n,IEEE4,motorfail IMP (li7700_diag=NAN))
+  FieldNames ("badauxtc1_Tot")
+  Totalize (1,n,IEEE4,calibrating IMP (li7700_diag=NAN))
+  FieldNames ("calibrating_Tot")
+  Totalize (1,n,IEEE4,bot_heat_on IMP (li7700_diag=NAN))
+  FieldNames ("bot_heat_on_Tot")
+  Totalize (1,n,IEEE4,top_heat_on IMP (li7700_diag=NAN))
+  FieldNames ("top_heat_on_Tot")
+  Totalize (1,n,IEEE4,pump_on IMP (li7700_diag=NAN))
+  FieldNames ("pump_on_Tot")
+  Totalize (1,n,IEEE4,motor_spin IMP (li7700_diag=NAN))
+  FieldNames ("motor_spin_Tot")
+  Totalize (1,n,IEEE4,block_t_unreg IMP (li7700_diag=NAN))
+  FieldNames ("block_t_unreg_Tot")
+  Totalize (1,n,IEEE4,laser_t_unreg IMP (li7700_diag=NAN))
+  FieldNames ("laser_t_unreg_Tot")
+  Totalize (1,n,IEEE4,bad_temp IMP (li7700_diag=NAN))
+  FieldNames ("bad_temp_Tot")
+  Totalize (1,n,IEEE4,ref_unlocked IMP (li7700_diag=NAN))
+  FieldNames ("ref_unlocked_Tot")
+  Totalize (1,n,IEEE4,no_signal IMP (li7700_diag=NAN))
+  FieldNames ("no_signal_Tot")
+  Totalize (1,n,IEEE4,not_ready IMP (li7700_diag=NAN))
+  FieldNames ("not_ready_Tot")
+  
+
+  '*** Begin of other output data ***
+  Average (1,panel_tmpr,IEEE4,slowsequence_disable_f)
+  Average (1,batt_volt,IEEE4,slowsequence_disable_f)
+  '*** End of other output data ***
+
+  Totalize (1,n,IEEE4,slowsequence_disable_f)
+  FieldNames ("slowsequence_Tot")
+  
+  
+EndTable
+
+
+
+'Time series data.
+DataTable (ts_data,TRUE,-1)
+  TableHide
+  DataInterval (0,SCAN_INTERVAL,mSec,100)
+
+  TableFile ("CRD:"&Status.SerialNumber(1,1)&".ts_data_",64,-1,0,20,Day,0,0)
+
+  'CSAT3
+  Sample (5,Ux,IEEE4)
+  'LI7200
+  Sample (10,li7200_co2_m,IEEE4)
+  'LI7700
+  Sample (5,li7700_ch4_d,IEEE4) 
+EndTable
+'***** End of output data tables *****
+
+'***** Start of Working tables *****
+DataTable (delay_table,TRUE,OFFSET)
+  Sample (5,sonic_irga_raw(1),IEEE4)
+  Sample (10,li7200_raw(1),IEEE4)
+  Sample (5,li7700_raw(1),IEEE4)
+EndTable
+
+
+
+DataTable (ts_data_CH4,TRUE,-1)
+  DataInterval (0,SCAN_INTERVAL,mSec,100)
+'  CardOut (0,-1) 
+  TableFile ("CRD:"&Status.SerialNumber(1,1)&".ts_data_ch4_",64,-1,0,20,Day,0,0)
+  
+  Sample (5,li7700_ch4_d,IEEE4) 
+  FieldNames ("CH4D_mg_m3,LI7700_pressure,LI7700_temp,LI7700_diag,RSSI")
+
+EndTable
+
+
+DataTable (comp_cov_li7200,TRUE,1)
+  DataInterval (0,OUTPUT_INTERVAL,Min,1)
+  'Compute covariances from CSAT3(A) data.
+  Covariance (6,cov_array_li7200(1,1),IEEE4,li7200_cov_disable_f,21)
+  WindVector (1,Uy,Ux,IEEE4,sonic_disable_f,0,1,2)
+EndTable
+
+DataTable (comp_cov_li7700,TRUE,1)
+  DataInterval (0,OUTPUT_INTERVAL,Min,1)
+  'Compute covariance of CH4 against sonic wind data.
+  Covariance (4,cov_array_li7700(1,1),IEEE4,li7700_cov_disable_f,4)
+
+EndTable
+'***** End of Working tables *****
+  
+
+
+
+'***** Begin of Slow Response data Tables *****
+DataTable(HMP_data,True,-1)
+  TableHide
+  DataInterval(0,1,min,1)
+  CardOut (0,200000)
+  'HMP155
+  Average(1,T_air,Ieee4,false)
+  Average(1,RH,Ieee4,false)
+EndTable
+
+DataTable (dat_10m,true,-1)
+  TableHide
+  DataInterval (0,10,min,10)
+  CardOut (0,200000)
+  'CNR4
+  Average (1,CM3Up,IEEE4,False)
+  Average (1,CM3Dn,IEEE4,False)
+  Average (1,CG3UpCo,IEEE4,False)
+  Average (1,CG3DnCo,IEEE4,False)
+  Average (1,CNR4TC,IEEE4,false)
+  Average (1,NetRs,IEEE4,false)
+  Average (1,NetRl,IEEE4,false)    
+  Average (1,NetTot,IEEE4,false)
+  'PAR & Diffused PAR
+  Average (1,global_solrad,IEEE4,False)
+  Average (1,diffused_solrad,IEEE4,False)
+
+EndTable
+
+'***** End of Slow Response data Tables *****
+
+
+
+
+'*** Program ***
+
+BeginProg
+  
+  
+  'Set the SDM clock speed.
+  SDMSpeed (SDM_PER)
+  Scan (SCAN_INTERVAL,mSec,SCAN_BUFFER_SIZE,0)
+    'Datalogger panel temperature.
+    'PanelTemp (panel_tmpr,250)
+
+
+    '*** Get unlagged data from EC100, LI7200, LI7700 ***
+    'Get EC155 w/ CSAT3A sonic head data.
+    EC100 (sonic_irga_raw(1),EC100_SDM_ADDR,0)
+    ' Option 0 : Ux(m/s), Uy(m/s), Uz(m/s), Ts(C), sonic diagnostic(arb), 
+    '            CO2*, H2O*, gas diagnostic(arb), 
+    '            ambient T(C), ambient P(kPa), CO2 signal strength(arb), H2O signal strength(arb)
+
+  	'Get LI7200 data
+		LI7200 (li7200_raw(1),1,LI7200_SDM_ADDR,2)		
+    ' Option 2: CO2 dry(??mol/mol), H2O dry(mmol/mol), CO2(mmol/m^3), H2O(mmol/m^3), AGC(%), 
+    '            Ptotal (kPa), Tin (C), Tout (C), Tavg_Tin_Tout (C), Aux channel #1
+		LI7200 (li7200_raw(10),1,LI7200_SDM_ADDR,6)	
+		' Option 6: diagnostic	
+
+
+    'Get LI7700
+    LI7700 (li7700_raw(1),1,LI7700_SDM_ADDR,1)
+    ' option 1 : CH4D (mmol/m^3), pressure (kPa), Temp (C), diagnostic value, RSSI, 
+    ' option 3 : CH4D (mmol/m^3), CH4 (umol/mol), pressure (kPa), Temp (C), diagnostic value, RSSI, AUX1, AUX2, AUX3, AUX4, AuxTc1, AuxTc2, AuxTc3
+    'li7700_raw(1) = li7700_raw(1) * 16   'to convert molar density to mass density, mg/m^3
+
+    CallTable delay_table
+   
+
+    If ( scan_count >= OFFSET ) Then
+
+      '*** Load unlagged data from delay_3d table with record_offset
+      GetRecord (dly_data_out(1),delay_table,CSAT3_REC_BCK)
+      Move (Ux,5,dly_data_out(1),5)  'Ux, Uy, Uz, Ts, csat_diag
+      GetRecord (dly_data_out(1),delay_table,LI7200_REC_BCK)
+      Move (li7200_co2_m,10,dly_data_out(6),10)  'co2_m, h2o_m, co2_d, h2o_d, agc, P, Tin, Tout, Tavg, diag
+       GetRecord (dly_data_out(1),delay_table,LI7700_REC_BCK)
+      Move (li7700_ch4_d,5,dly_data_out(16),5)  'ch4_d, P, T, diag, rssi
+
+      
+      'Save time series data.
+      CallTable ts_data
+      CallTable ts_data_CH4
+      
+      'diagnose the data based on diagnostic info from the instruments
+      'Extract the four warning flags from the sonic diagnostic word.
+      If ( diag_sonic <> NAN ) Then ( diag_sonic_tmp = diag_sonic ) Else ( diag_sonic_tmp = &hf000)
+      mask_sonic = &h1000
+      For i = 1 To 4
+        diag_bits_sonic(i) = diag_sonic_tmp AND mask_sonic
+        mask_sonic = mask_sonic*2
+      Next i
+
+      'Turn on the intermediate processing disable flag when any CSAT3
+      'warning flag is high.
+      sonic_disable_f = diag_sonic_tmp AND &hf000
+
+      'Extract the four warning flags from the LI7200 diagnostic word.
+      If ( li7200_diag <> NAN ) Then ( diag_li7200_tmp = NOT(li7200_diag) ) Else ( diag_li7200_tmp = &hffff)
+      mask_li7200 = &h0010
+      For i = 1 To 9
+        diag_bits_li7200(i) = diag_li7200_tmp AND mask_li7200
+        mask_li7200 = mask_li7200*2
+      Next i
+      li7200_disable_f = diag_li7200_tmp AND &h0ff0
+      li7200_cov_disable_f = li7200_disable_f OR sonic_disable_f
+      
+      'Extract the four warning flags from the LI7700 diagnostic word.
+      If ( li7700_diag <> NAN ) Then ( diag_li7700_tmp = li7700_diag ) Else ( diag_li7700_tmp = &hffff)
+      mask_li7700 = &h0001
+      For i = 1 To 16
+        diag_bits_li7700(i) = diag_li7700_tmp AND mask_li7700
+        mask_li7700 = mask_li7700*2
+      Next i
+      li7700_disable_f = diag_li7700_tmp AND &hef30
+      li7700_cov_disable_f = li7700_disable_f OR sonic_disable_f
+
+
+
+
+      Move (cov_array_li7200(1,1),4,Ux,4)
+      Move (cov_array_li7200(1,5),2,li7200_co2_m,2)
+      Move (cov_array_li7700(1,1),1,li7700_ch4_d,1)
+      Move (cov_array_li7700(1,2),3,Ux,3)
+      
+      CallTable comp_cov_li7200
+      CallTable comp_cov_li7700
+      
+      If ( comp_cov_li7200.Output(1,1) ) Then
+          GetRecord (ux_stdev,comp_cov_li7200,1)
+          
+          Ts_stdev = SQR (Ts_stdev)
+          ux_stdev = SQR (ux_stdev)
+          uy_stdev = SQR (uy_stdev)
+          uz_stdev = SQR (uz_stdev)
+          co2_stdev = SQR (co2_stdev)
+          h2o_stdev = SQR (h2o_stdev)
+          
+          'Rotate the CSAT3 RHC system so the negative x-axis points north.
+          wnd_dir_compass = (360+sonic_azimuth-wnd_dir_sonic) MOD 360
+          'Make the CSAT3 wind direction fall between 0 to 180 degrees and 0 to -180 degrees.
+          If ( wnd_dir_sonic > 180 ) Then ( wnd_dir_sonic = wnd_dir_sonic-360 )
+
+      EndIf
+
+      If ( comp_cov_li7700.Output(1,1) ) Then
+          GetRecord (ch4_stdev,comp_cov_li7700,1)
+          ch4_stdev = SQR (ch4_stdev)
+      EndIf
+
+
+      
+
+      CallTable flux
+      
+      
+      slowsequence_disable_f = TRUE
+      If ( slowsequence_finished_f ) Then
+        slowsequence_finished_f = FALSE
+        slowsequence_disable_f = FALSE
+      EndIf
+    Else
+      scan_count = scan_count+1
+    EndIf
+
+   
+  NextScan
+
+
+
+  
+
+
+SlowSequence
+
+  Scan (1,Sec,10,0)
+    'Measure battery voltage & panel temperature
+    Battery (batt_volt)
+    PanelTemp (TRef,250)
+
+    'CNR4 Net Radiometer measurements sn: 140261
+    VoltDiff(CM3Up,1,mV20,4,True,0,250,92.6784,0)'10.79
+    VoltDiff(CM3Dn,1,mV20,5,True,0,250,79.3651,0) '12.60
+    VoltDiff(CG3Up,1,mV20,6,True,0,250,90.9918,0)'10.99
+    VoltDiff(CG3Dn,1,mV20,7,True,0,250,84.8176,0) '11.79
+    Resistance(CNR4TC,1,mV200,8,Ix1,1,1675,True,True,200,250,1.0,0)
+    '    BrHalf4W(CNR1TC,1,mV50,mV50,5,Vx3,1,4200,True,True,0,_60Hz,78.4929,0)
+    CNR4TC=CNR4TC/100
+    PRT(CNR4TC,1,CNR4TC,1,0)
+    
+    CNR4TK = CNR4TC + 273.18
+    NetRs = CM3Up - CM3Dn
+    NetRl = CG3Up - CG3Dn
+    Albedo = CM3Dn / CM3Up
+    UpTot = CM3Up + CG3Up
+    DnTot = CM3Dn + CG3Dn
+    NetTot = UpTot - DnTot
+    CG3UpCo = CG3Up + 5.67*10^-8 * CNR4TK^4
+    CG3DnCo = CG3Dn + 5.67*10^-8 * CNR4TK^4
+
+    VoltDiff(global_solrad,1,mV20,9,True,0,250,115.8749,0)
+
+    VoltDiff(diffused_solrad,1,mV20,10,True,0,250,111.6071,0)
+    
+    'hmp155
+  	VoltSe(T_air,1,mV5000,27,True,0,_60Hz,0.14,-80)
+    VoltSe(RH,1,mv5000,28,True,0,_60Hz,0.1,0)
+    
+
+    CallTable(HMP_data)
+    CallTable dat_10m
+    
+    slowsequence_finished_f = TRUE
+  NextScan  
+EndProg

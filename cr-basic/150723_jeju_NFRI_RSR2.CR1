@@ -1,0 +1,1045 @@
+'	CR800/CR1000 Program Code for Irradiance, Inc. Rotating Shadowband Radiometer (RSR2)
+' $DateTime: 2014/06/17 21:01:35 $
+' $Revision: #20 $
+'
+'	                     Copyright 2006-2013; All rights reserved.
+'           This code may be used only with Irradiance, Inc. RSR2 equipment.
+'	                       User modifications at user's risk.
+'
+'  NOTES
+'
+'  Datalogger clock is set to Coordinated Universal Time (UTC)
+'    OR Local Standard Time by attached GPS.
+'
+'=========================================================================================
+'  PROGRAM OPERATION
+'=========================================================================================
+'  This program handles systems with both WXT520 and conventional wind, pressure, and air
+'  temperature and relative humidity sensors.  The wiring configuration is intended for
+'  RSR2 stations using either CR800 or CR1000 dataloggers.  With this program code a GPS
+'  is used to set the datalogger clock and to set the latitude, longitude and altitude of
+'  of the station.  
+
+'  A cleaning routine is implemented with a momentary switch used to
+'  request a two-minute pause in rotations to allow for sensor cleaning and leveling. As
+'  part of this process a "Cleaning" datatable is created to document the cleaning event
+'  with before and after measurements. 
+'  In addition to the calibration mode routine (and
+'  the Boolean Flag "CalibMode", two more controls are implemented.  A "SweepData" flag
+'  is used to collect statistics on the sweep processing for each sweep.  CalibMode and
+'  SweepData are all reset to false (off) each local midnight as a protection against
+'  user error.  
+
+'  Another Boolean "SunUP" is introduced to use as a standard control used
+'  throughout the program. SunUp is true when the sun's apparent (refracted) elevation
+'  is greater than 0.27 degrees, with the lower limb of the sun on the horizon.
+'
+'  A "Constant Table" is used at the beginning of the program code to set up the station
+'  location and calibration factors.  This constant table can be edited without resending
+'  the program code to a datalogger.  LoggerNet or a Keyboard can be used for editing.
+'  User input latitude, longitude and altitude are entered and used to initialize the
+'  station location.  When the GPS has a good location fix (WAAS) its values override the
+'  user settings.  The distance from the GPS and user settings is recorded in the daily
+'  status table.
+'=========================================================================================
+'  WIRING PANEL TERMINATIONS: SEE CONFIGURATION CONSTANTS BELOW FOR PORT NUMBERS
+'=========================================================================================
+'  Standard sensors for configurations effective 1 April 2013-----------------------------
+'  Global PIR at Over the forest without band - diff 1 
+'  Global PIR at High the forest without band - diff 2
+'  Global PIR at Mid the forest without band - diff 3 
+'  Global PIR at Low the forest without band - diff 4 
+'  Global PIR at Over the forest with band - diff 5 
+'  Global PIR at High the forest with band - diff 6
+'  Global PIR at Mid the forest with band - diff 7
+'  Global PIR at Low the forest with band - diff 8 
+
+'  Motor controller       Grey          PortBandControl_c   Band control
+'  Motor controller1      Red          +5V                  Logic power
+'  Motor controller1      Blue          not connected       Motion feedback
+'  Motor controller1      Black         Power ground        Power ground
+
+'  Optional weather and meteorological sensors--------------------------------------------
+
+'=========================================================================================
+'  CONFIGURATION CHANNELS AND PORTS FOR STATION-SPECIFIC CONFIGURATION
+'=========================================================================================
+
+'Const ComPortGPS_c             As Long = 0'com1
+
+Const PortBandControl_c_over        As Long = 5 
+Const PortBandControl_c_high        As Long = 6  
+Const PortBandControl_c_mid        As Long = 7  
+Const PortBandControl_c_low        As Long = 8  
+
+ConstTable 'This should be edited for RSR2 location and configuration specifics
+  'Site Details-----------------------------------------------------------------------------
+  Const Scan_c = 15 'Time interval in seconds for main scan loop (use 3s or 5s) four bands ????
+'  Const ThreeSecondData_c = 0 '0=normal, -1=rotate every scan (Use 0 normally)
+  Const SlowScan_c = 30 'Time interval in seconds for slow scan loop (use 30s)
+'  Const CleanTime_c = 86400 'Time allowed for cleaning sensor (suggest 120 seconds)
+  '                        MUST be integer multiple of Scan_c
+  Const TimeZoneMin_c = 540 'Stardard time in minutes ahead (Asia>0) or behind (Americas<0) UTC
+  Const MaxClkError = 20 'Clock difference allowed when checked by GPS (mSec)
+  Const Lat_c = 33.1908 'Site latitude, >0 for north latitude
+  Const Lon_c = 126.34063 'Site longitude, >0 for east longitude (Asia>0, Americas<0)
+  Const Alt_c = 648 'Site altitude in meters above mean sea level
+  Const RH_c = 60.0 'Assumed relative humidity (%) for sites without RH sensor
+  'Optional meteorological sensors----------------------------------------------------------
+
+
+  'Communications, Time, and GPS Options----------------------------------------------------
+  '  Const ComPower_c  = 0 '0 = power all the time (w/daily power cycle), 1 = ON from 5min before to 5min after   '                      each hour and half-hour (55min to 05min and 25min to 35min)
+  Const LocalTime_c = 1 '1 = data/clock in local std time, 0 = UTC
+  Const GPS_c       = 0 '1 = GPS is installed, 0 = not installed
+
+EndConstTable
+
+Const MidnightMin_c = -1*NOT(-1*LocalTime_c)*((1440-TimeZoneMin_c) MOD 1440)
+
+AngleDegrees
+' Declare Variables which are used during onsite validation first so that they appear first in the public table
+Public Global_band_over, Direct_band_over, Diffuse_band_over
+Public Global_band_high, Direct_band_high, Diffuse_band_high
+Public Global_band_mid, Direct_band_mid, Diffuse_band_mid
+Public Global_band_low, Direct_band_low, Diffuse_band_low
+
+Public Global_ref_over, Global_ref_high, Global_ref_mid, Global_ref_low
+
+
+Public Batt_Volt, Panel_Temp
+Public ZenDeg
+'  Variables for Campbell Solar Position calculator
+Public SolPos(5)
+Alias SolPos(1) = AzDeg
+Alias SolPos(2) = ElDeg
+Alias SolPos(3) = HourAngle
+Alias SolPos(4) = Declination
+Alias SolPos(5) = AirMass ' Pressure Corrected.
+Public AirMassOptical ' Not Pressure Corrected.
+Public CosZen
+
+' Declare Site Variables
+Public Lat, Lon, Alt
+
+'	Declare Variables and Units for Non RSR Measurements
+
+'  Variables for cleaning control and measurement
+'Public Cleaning As Boolean
+'Dim CountDown As Long
+'Dim CleanScans As Long
+'Public Pulse2
+'Public Pre_Clean, Post_Clean
+'Public CleanRequest As Boolean
+'Dim CleanCount
+
+'	Variables for Shadowband control and measurement
+
+Public Rot_Count_over As Long, No_Well_Count_over As Long, Low_Volt_Count_over As Long
+Public Rot_Count_high As Long, No_Well_Count_high As Long, Low_Volt_Count_high As Long
+Public Rot_Count_mid As Long, No_Well_Count_mid As Long, Low_Volt_Count_mid As Long
+Public Rot_Count_low As Long, No_Well_Count_low As Long, Low_Volt_Count_low As Long
+
+Public SweepData_over As Boolean, SweepData_high As Boolean
+Public SweepData_mid As Boolean, SweepData_low As Boolean
+
+Public Start_Sequence As Boolean
+
+Public Rotation_State_over As Boolean,Rotation_State_high As Boolean
+Public Rotation_State_mid As Boolean,Rotation_State_low As Boolean
+Public Rotation_this_Scan_over As Boolean, Rotation_this_Scan_high As Boolean
+Public Rotation_this_Scan_mid As Boolean, Rotation_this_Scan_low As Boolean
+
+Public SunUp As Boolean
+Public Freeze As Boolean
+
+Public Center_Index_over As Long,Center_Index_high As Long
+Public Center_Index_mid As Long,Center_Index_low As Long
+Public Well_Width_over As Long, Well_Width_high As Long
+Public Well_Width_mid As Long, Well_Width_low As Long
+
+'  Variables for Campbell's NetworkTimeProtocol function
+Public Time(9)
+Alias Time(1) = Year
+Alias Time(2) = Month
+Alias Time(3) = DOM
+Alias Time(4) = Hour
+Alias Time(5) = Minute
+Alias Time(6) = Second
+Alias Time(7) = uSecond
+Alias Time(8) = DOW
+Alias Time(9) = DOY
+'  Variables for sweep reduction
+'Public target As Long
+Public minpos_over As Long,minpos_high As Long, minpos_mid As Long, minpos_low As Long
+'Public smoothpos As Long
+
+' Center of sweep around well_center, and offset of this range.
+Dim SweepOffset_over As Long
+Dim SweepCenter_over(100)
+Dim SweepOffset_high As Long
+Dim SweepCenter_high(100)
+Dim SweepOffset_mid As Long
+Dim SweepCenter_mid(100)
+Dim SweepOffset_low As Long
+Dim SweepCenter_low(100)
+
+'Public CLR 'CLR defined as Diffuse/Global as a measure of clearness
+
+'	Constants
+Const Pi = 3.1415927
+Const StdPressure = 1013.25 'Sea level pressure, mB.
+
+
+'Data Tables =============================================================================
+
+
+DataTable(SweepData_over, SweepData_over AND Rotation_this_Scan_over AND SunUp, 1500)
+  Sample(1, Well_Width_over, FP2)
+  Sample(1, Global_band_over, FP2)
+  Sample(1, Band_Blocked_over, FP2)
+  Sample(1, Diffuse_band_over, FP2)
+  Sample(1, Direct_band_over, FP2)
+EndTable
+DataTable(SweepData_high, SweepData_high AND Rotation_this_Scan_high AND SunUp, 1500)
+  Sample(1, Well_Width_high, FP2)
+  Sample(1, Global_band_high, FP2)
+  Sample(1, Band_Blocked_high, FP2)
+  Sample(1, Diffuse_band_high, FP2)
+  Sample(1, Direct_band_high, FP2)
+EndTable
+DataTable(SweepData_mid, SweepData_mid AND Rotation_this_Scan_mid AND SunUp, 1500)
+  Sample(1, Well_Width_mid, FP2)
+  Sample(1, Global_band_mid, FP2)
+  Sample(1, Band_Blocked_mid, FP2)
+  Sample(1, Diffuse_band_mid, FP2)
+  Sample(1, Direct_band_mid, FP2)
+EndTable
+DataTable(SweepData_low, SweepData_low AND Rotation_this_Scan_low AND SunUp, 1500)
+  Sample(1, Well_Width_low, FP2)
+  Sample(1, Global_band_low, FP2)
+  Sample(1, Band_Blocked_low, FP2)
+  Sample(1, Diffuse_band_low, FP2)
+  Sample(1, Direct_band_low, FP2)
+EndTable
+
+
+
+DataTable(_01_Min, True, -1) 'Data table for 1-minute records
+  DataInterval(0, 1, Min, -1) 'Change interval as required for application
+  Average(1, Global_band_over, FP2, False)
+  Average(1, Global_ref_over, FP2, False)
+  Average(1, Direct_band_over, FP2, False)
+  Average(1, Diffuse_band_over, FP2, False)
+
+  Average(1, Global_band_high, FP2, False)
+  Average(1, Global_ref_high, FP2, False)
+  Average(1, Direct_band_high, FP2, False)
+  Average(1, Diffuse_band_high, FP2, False)
+
+  Average(1, Global_band_mid, FP2, False)
+  Average(1, Global_ref_mid, FP2, False)
+  Average(1, Direct_band_mid, FP2, False)
+  Average(1, Diffuse_band_mid, FP2, False)
+
+  Average(1, Global_band_low, FP2, False)
+  Average(1, Global_ref_low, FP2, False)
+  Average(1, Direct_band_low, FP2, False)
+  Average(1, Diffuse_band_low, FP2, False)
+
+  Average(1, ZenDeg, FP2, False)
+
+EndTable
+DataTable(_01_Hour, True, -1) 'Data table for 1-hour records
+  DataInterval(0, 1, Hr, -1) 'Change interval as required for application
+  Average(1, Global_band_over, FP2, False)
+  Average(1, Global_ref_over, FP2, False)
+  Average(1, Direct_band_over, FP2, False)
+  Average(1, Diffuse_band_over, FP2, False)
+
+  Average(1, Global_band_high, FP2, False)
+  Average(1, Global_ref_high, FP2, False)
+  Average(1, Direct_band_high, FP2, False)
+  Average(1, Diffuse_band_high, FP2, False)
+
+  Average(1, Global_band_mid, FP2, False)
+  Average(1, Global_ref_mid, FP2, False)
+  Average(1, Direct_band_mid, FP2, False)
+  Average(1, Diffuse_band_mid, FP2, False)
+
+  Average(1, Global_band_low, FP2, False)
+  Average(1, Global_ref_low, FP2, False)
+  Average(1, Direct_band_low, FP2, False)
+  Average(1, Diffuse_band_low, FP2, False)
+
+EndTable
+DataTable(_01_Day, True, -1) 'Data table for 1-Day records
+  DataInterval(MidnightMin_c, 1440, Min, -1)
+  'Note time stamp on record will be UCT at local midnight
+  Average(1, Global_band_over, FP2, False)
+  Average(1, Global_ref_over, FP2, False)
+  Average(1, Direct_band_over, FP2, False)
+  Average(1, Diffuse_band_over, FP2, False)
+
+  Average(1, Global_band_high, FP2, False)
+  Average(1, Global_ref_high, FP2, False)
+  Average(1, Direct_band_high, FP2, False)
+  Average(1, Diffuse_band_high, FP2, False)
+
+  Average(1, Global_band_mid, FP2, False)
+  Average(1, Global_ref_mid, FP2, False)
+  Average(1, Direct_band_mid, FP2, False)
+  Average(1, Diffuse_band_mid, FP2, False)
+
+  Average(1, Global_band_low, FP2, False)
+  Average(1, Global_ref_low, FP2, False)
+  Average(1, Direct_band_low, FP2, False)
+  Average(1, Diffuse_band_low, FP2, False)
+
+  Minimum(1, Batt_Volt, FP2, False, False)
+  Maximum(1, Batt_Volt, FP2, False, False)
+  Maximum(1, Panel_Temp, FP2, False, False)
+  Minimum(1, Panel_Temp, FP2, False, False)
+
+  Average(1, Well_Width_over, FP2, NOT Rotation_this_Scan_over)
+  StdDev(1, Well_Width_over, FP2, NOT Rotation_this_Scan_over)
+  Average(1, Well_Width_high, FP2, NOT Rotation_this_Scan_high)
+  StdDev(1, Well_Width_high, FP2, NOT Rotation_this_Scan_high)
+  Average(1, Well_Width_mid, FP2, NOT Rotation_this_Scan_mid)
+  StdDev(1, Well_Width_mid, FP2, NOT Rotation_this_Scan_mid)
+  Average(1, Well_Width_low, FP2, NOT Rotation_this_Scan_low)
+  StdDev(1, Well_Width_low, FP2, NOT Rotation_this_Scan_low)
+
+  '		Note: the Not sets this False to capture only daytime rotation scans
+  Maximum(1, Rot_Count_over, FP2, False, False)
+  Maximum(1, No_Well_Count_over, FP2, False, False)
+  Maximum(1, Low_Volt_Count_over, FP2, False, False)
+  Maximum(1, Rot_Count_high, FP2, False, False)
+  Maximum(1, No_Well_Count_high, FP2, False, False)
+  Maximum(1, Low_Volt_Count_high, FP2, False, False)
+  Maximum(1, Rot_Count_mid, FP2, False, False)
+  Maximum(1, No_Well_Count_mid, FP2, False, False)
+  Maximum(1, Low_Volt_Count_mid, FP2, False, False)
+  Maximum(1, Rot_Count_low, FP2, False, False)
+  Maximum(1, No_Well_Count_low, FP2, False, False)
+  Maximum(1, Low_Volt_Count_low, FP2, False, False)
+
+  Maximum(1, DLat, FP2, False, False)
+  Maximum(1, Dlon, FP2, False, False)
+  Maximum(1, Distance, FP2, False, False)
+
+EndTable
+
+'DataTable(_Clean, True, 366) 'Data table pre and post cleaning records
+'  Sample(1, Pre_Clean, IEEE4)
+'  Sample(1, Post_Clean, IEEE4)
+'EndTable
+DataTable(SweepRaw_over, True, 5)
+  Sample(1, SweepOffset_over, Long)
+  Sample(1, Rotation_State_over, Boolean)
+  Sample(100, SweepCenter_over, FP2)
+EndTable
+DataTable(SweepRaw_high, True, 5)
+  Sample(1, SweepOffset_high, Long)
+  Sample(1, Rotation_State_high, Boolean)
+  Sample(100, SweepCenter_high, FP2)
+EndTable
+DataTable(SweepRaw_mid, True, 5)
+  Sample(1, SweepOffset_mid, Long)
+  Sample(1, Rotation_State_mid, Boolean)
+  Sample(100, SweepCenter_mid, FP2)
+EndTable
+DataTable(SweepRaw_low, True, 5)
+  Sample(1, SweepOffset_low, Long)
+  Sample(1, Rotation_State_low, Boolean)
+  Sample(100, SweepCenter_low, FP2)
+EndTable
+
+'=========================================================================================
+'================================ START PROTECTED CODE ===================================
+'=========================================================================================
+
+
+'-----------------------------------------------------------------------------------------
+Sub Time_Location_SunPos
+'  Public GPSData(15), nmea_sentence(2) As String * 90
+  Public DLat, Dlon, DAlt, Distance
+'  Dim Q1, Q2, Q3
+'  Alias GPSData(1) = Lat_a 'Integer degrees of latitude
+'  Alias GPSData(2) = Lat_b 'Decimal minutes of latitude
+'  Alias GPSData(3) = Lon_a 'Integer degrees of longitude
+'  Alias GPSData(4) = Lon_b 'Decimal minutes of longitude
+'  Alias GPSData(8) = fix_quality '0=none,1=regular,2=differential,6=estimate
+'  Alias GPSData(10) = Alt_GPS
+
+'  #If (GPS_c <> 0) Then
+'  GPS(GPSData(1), ComPortGPS_c, LocalTime_c*TimeZoneMin_c*60, MaxClkError, nmea_sentence(1))
+'  #EndIf
+  '  control ports c1/c2 on CR800 or CR1000. Com2 is used for RSR2 motor control (C4)
+  '  and SDI12 devices (C3) such as WXT520. The following code updates the lat lon
+  '  based on the GPS readings.
+  RealTime(Time) 'Time at start of scan not latest GPS update from above
+  'Reset the solar position (SolPos is calculated 15 seconds ahead)
+  Second = Second + SlowScan_c / 2 'Calculate position at middle of slow sequence scan
+
+'  If (GPS_c <> 0) Then
+'    If fix_quality = 2 Then 'Wait until there is a valid GPS fix to process data
+'      Lat = Lat_a + Lat_b / 60.
+'      Lon = Lon_a + Lon_b / 60.
+'      Alt = Alt_GPS
+'    EndIf
+'
+'    DLat = Lat - Lat_c
+'    Dlon = Lon - Lon_c
+'    DAlt = Alt - Alt_c
+'    Q1 = SIN(DLat) * SIN(DLat / 2) + SIN(Dlon / 2) ^ 2 * COS(Lat) * COS(Lat_c)
+'    Q2 = 2 * (Pi / 180) * ATN2(SQR(Q1), SQR(1 - Q1))
+'    Q3 = 6371000.
+'    Distance = Q3 * Q2
+'  EndIf
+
+  SolarPosition(SolPos, Time, LocalTime_c*TimeZoneMin_c*60, Lat, Lon, Alt, -1, 20)
+  AirMassOptical = AirMass * (StdPressure / 101.3)
+
+  ZenDeg = 90.0 - ElDeg
+  CosZen = COS(ZenDeg)
+  If ElDeg > 0.27 Then SunUp = True Else SunUp = False
+EndSub
+
+'-----------------------------------------------------------------------------------------
+'	Subroutine to rotate the shadowband and determine the diffuse irradiance
+Sub Rotation_over
+  Dim ZZ_over(1280), Global_Start_over, Global_End_over
+  Dim Total_Start_over, Total_End_over, Band_Blocked_Start_over, Band_Blocked_End_over
+  Dim I_over As Long
+  Public Global_band_over_Prior, Band_Blocked_over
+  Public Global_Ramping_over As Boolean
+  Global_Ramping_over = False
+  Global_band_over_Prior = Global_band_over
+  If Global_band_over <= 1 Then Exit Sub 'Stop rotations for leveling primary or secondary sensor
+  If Batt_Volt < 10.5 Then 'Stop rotations to save battery
+    Diffuse_band_over = 0.0  
+    Low_Volt_Count_over = Low_Volt_Count_over + 1
+    Exit Sub
+  EndIf
+  Rotation_this_Scan_over = True 'This is set = false at start of each scan
+  Rotation_State_over = NOT Rotation_State_over
+  Rot_Count_over = Rot_Count_over + 1
+  PortSet(PortBandControl_c_over, Rotation_State_over)
+
+  VoltDiff (zz_over,1280,mV25,-5,false ,1000,250,-249.98,0) 'be careful! channel!!!
+
+  Call Reduce_over(ZZ_over())
+  'Process ZZ to get Global_band_over at beginning and end of rotation
+  AvgSpa(Global_Start_over, 5, ZZ_over(1))
+  AvgSpa(Global_End_over, 5, ZZ_over(1276))
+  Global_band_over = 0.5 * (Global_Start_over + Global_End_over)
+  If (Well_Width_over > 40 OR Well_Width_over < 10 OR _
+    Center_Index_over - Well_Width_over - 1 < 1 OR _
+    Center_Index_over + Well_Width_over + 1 > 1280 ) Then 'Case of poorly defined well
+    Diffuse_band_over = Global_band_over   '???
+    Global_Start_over = 0.0
+    Global_End_over = 0.0
+    Band_Blocked_Start_over = 0.0
+    Band_Blocked_End_over = 0.0
+    No_Well_Count_over = No_Well_Count_over + 1
+  Else 'Case of well defined well; process shoulders of well to determine diffuse blocked
+    I_over = Center_Index_over - Well_Width_over
+    Band_Blocked_Start_over = (ZZ_over(I_over - 1) + 2 * ZZ_over(I_over) + ZZ_over(I_over + 1)) / 4.
+    I_over = Center_Index_over + Well_Width_over
+    Band_Blocked_End_over = (ZZ_over(I_over - 1) + 2 * ZZ_over(I_over) + ZZ_over(I_over + 1)) / 4
+    Band_Blocked_over = 0.5 * (Band_Blocked_Start_over + Band_Blocked_End_over)
+    If Band_Blocked_over > Global_band_over Then Band_Blocked_over = Global_band_over
+    I_over = Center_Index_over
+    Diffuse_band_over = (ZZ_over(I_over - 1) + 2 * ZZ_over(I_over) + ZZ_over(I_over + 1)) / 4 'Average three samples centered in the well
+    Diffuse_band_over = Diffuse_band_over + Global_band_over - Band_Blocked_over 'Add back the diffuse blocked by the band
+  EndIf
+
+  SweepOffset_over = Center_Index_over - 50
+  If SweepOffset_over < 1 Then SweepOffset_over = 1
+  If SweepOffset_over > 1280 - 100 Then SweepOffset_over = 1280 - 100
+  For I_over = 1 To 100
+    SweepCenter_over(I_over) = ZZ_over(I_over + SweepOffset_over - 1)
+  Next I_over
+  CallTable(SweepRaw_over)'???
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub RawScreen_over
+  '	Preliminary calculation of (raw) direct normal irradiance
+  '	First check and reset small negative values
+  If Global_band_over > -20.0 AND Global_band_over < 0.0 Then
+    Global_band_over = 0.0
+    Diffuse_band_over = 0.0
+    Direct_band_over = 0.0
+  EndIf
+  If Diffuse_band_over > Global_band_over Then Diffuse_band_over = Global_band_over 'Not possible, set equal
+  If SunUp  Then 'Lower limb of sun above horizon
+    Direct_band_over = (Global_band_over - Diffuse_band_over) / CosZen
+  Else
+    Direct_band_over = 0.0
+    Diffuse_band_over = Global_band_over
+  EndIf
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Reduce_over(reduce_sweep_over(1280) As Float)
+  Dim reduce_minspa_over(2)
+  Dim reduce_begin_over As Long, reduce_end_over As Long, reduce_i_over As Long
+  Dim reduce_deriv_over As Float
+  Dim reduce_deriv_min_over As Float, reduce_deriv_min_pos_over As Long
+  Dim reduce_deriv_max_over As Float, reduce_deriv_max_pos_over As Long
+  MinSpa(reduce_minspa_over, 1280, reduce_sweep_over(1))
+  minpos_over = reduce_minspa_over(2)
+  ' Derivative window is minimum +/- 50, constrained so as the kernel fits.
+  reduce_begin_over = reduce_minspa_over(2) - 50
+  If reduce_begin_over < (1 + 4) Then
+    reduce_begin_over = 1 + 4
+  EndIf
+  reduce_end_over = reduce_minspa_over(2) + 50
+  If reduce_end_over > (1280 - 4) Then
+    reduce_end_over = 1280 - 4
+  EndIf
+  reduce_deriv_max_pos_over = -1
+  reduce_deriv_min_pos_over = -1
+  For reduce_i_over = reduce_begin_over To reduce_end_over
+    ' Compute the derivative using a 9 sample gaussian kernel.
+    reduce_deriv_over =                8 * (reduce_sweep_over(reduce_i_over + 1) - reduce_sweep_over(reduce_i_over - 1))
+    reduce_deriv_over = reduce_deriv_over + 9 * (reduce_sweep_over(reduce_i_over + 2) - reduce_sweep_over(reduce_i_over - 2))
+    reduce_deriv_over = reduce_deriv_over + 5 * (reduce_sweep_over(reduce_i_over + 3) - reduce_sweep_over(reduce_i_over - 3))
+    reduce_deriv_over = reduce_deriv_over + 2 * (reduce_sweep_over(reduce_i_over + 4) - reduce_sweep_over(reduce_i_over - 4))
+    ' Uses >= and < so it's symmetric.
+    If reduce_deriv_max_pos_over < 0 OR reduce_deriv_over >= reduce_deriv_max_over Then
+      reduce_deriv_max_over = reduce_deriv_over
+      reduce_deriv_max_pos_over = reduce_i_over
+    EndIf
+    If reduce_deriv_min_pos_over < 0 OR reduce_deriv_over < reduce_deriv_min_over Then
+      reduce_deriv_min_over = reduce_deriv_over
+      reduce_deriv_min_pos_over = reduce_i_over
+    EndIf
+  Next reduce_i_over
+  Center_Index_over = Round((reduce_deriv_max_pos_over + reduce_deriv_min_pos_over) / 2, 0)
+  Well_Width_over = Round(reduce_deriv_max_pos_over - reduce_deriv_min_pos_over,0)
+EndSub
+
+
+'	Subroutine to rotate the shadowband and determine the diffuse irradiance
+Sub Rotation_high
+  Dim ZZ_high(1280), Global_Start_high, Global_End_high
+  Dim Total_Start_high, Total_End_high, Band_Blocked_Start_high, Band_Blocked_End_high
+  Dim I_high As Long
+  Public Global_band_high_Prior, Band_Blocked_high
+  Public Global_Ramping_high As Boolean
+  Global_Ramping_high = False
+  Global_band_high_Prior = Global_band_high
+  If Global_band_high <= 1 Then Exit Sub 'Stop rotations for leveling primary or secondary sensor
+  If Batt_Volt < 10.5 Then 'Stop rotations to save battery
+    Diffuse_band_high = 0.0  
+    Low_Volt_Count_high = Low_Volt_Count_high + 1
+    Exit Sub
+  EndIf
+  Rotation_this_Scan_high = True 'This is set = false at start of each scan
+  Rotation_State_high = NOT Rotation_State_high
+  Rot_Count_high = Rot_Count_high + 1
+  PortSet(PortBandControl_c_high, Rotation_State_high)
+
+  VoltDiff (zz_high,1280,mV25,-5,false ,1000,250,-249.98,0) 'be careful! channel!!!
+
+  Call Reduce_high(ZZ_high())
+  'Process ZZ to get Global_band_high at beginning and end of rotation
+  AvgSpa(Global_Start_high, 5, ZZ_high(1))
+  AvgSpa(Global_End_high, 5, ZZ_high(1276))
+  Global_band_high = 0.5 * (Global_Start_high + Global_End_high)
+  If (Well_Width_high > 40 OR Well_Width_high < 10 OR _
+    Center_Index_high - Well_Width_high - 1 < 1 OR _
+    Center_Index_high + Well_Width_high + 1 > 1280 ) Then 'Case of poorly defined well
+    Diffuse_band_high = Global_band_high   '???
+    Global_Start_high = 0.0
+    Global_End_high = 0.0
+    Band_Blocked_Start_high = 0.0
+    Band_Blocked_End_high = 0.0
+    No_Well_Count_high = No_Well_Count_high + 1
+  Else 'Case of well defined well; process shoulders of well to determine diffuse blocked
+    I_high = Center_Index_high - Well_Width_high
+    Band_Blocked_Start_high = (ZZ_high(I_high - 1) + 2 * ZZ_high(I_high) + ZZ_high(I_high + 1)) / 4.
+    I_high = Center_Index_high + Well_Width_high
+    Band_Blocked_End_high = (ZZ_high(I_high - 1) + 2 * ZZ_high(I_high) + ZZ_high(I_high + 1)) / 4
+    Band_Blocked_high = 0.5 * (Band_Blocked_Start_high + Band_Blocked_End_high)
+    If Band_Blocked_high > Global_band_high Then Band_Blocked_high = Global_band_high
+    I_high = Center_Index_high
+    Diffuse_band_high = (ZZ_high(I_high - 1) + 2 * ZZ_high(I_high) + ZZ_high(I_high + 1)) / 4 'Average three samples centered in the well
+    Diffuse_band_high = Diffuse_band_high + Global_band_high - Band_Blocked_high 'Add back the diffuse blocked by the band
+  EndIf
+
+  SweepOffset_high = Center_Index_high - 50
+  If SweepOffset_high < 1 Then SweepOffset_high = 1
+  If SweepOffset_high > 1280 - 100 Then SweepOffset_high = 1280 - 100
+  For I_high = 1 To 100
+    SweepCenter_high(I_high) = ZZ_high(I_high + SweepOffset_high - 1)
+  Next I_high
+  CallTable(SweepRaw_high)'???
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub RawScreen_high
+  '	Preliminary calculation of (raw) direct normal irradiance
+  '	First check and reset small negative values
+  If Global_band_high > -20.0 AND Global_band_high < 0.0 Then
+    Global_band_high = 0.0
+    Diffuse_band_high = 0.0
+    Direct_band_high = 0.0
+  EndIf
+  If Diffuse_band_high > Global_band_high Then Diffuse_band_high = Global_band_high 'Not possible, set equal
+  If SunUp  Then 'Lower limb of sun above horizon
+    Direct_band_high = (Global_band_high - Diffuse_band_high) / CosZen
+  Else
+    Direct_band_high = 0.0
+    Diffuse_band_high = Global_band_high
+  EndIf
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Reduce_high(reduce_sweep_high(1280) As Float)
+  Dim reduce_minspa_high(2)
+  Dim reduce_begin_high As Long, reduce_end_high As Long, reduce_i_high As Long
+  Dim reduce_deriv_high As Float
+  Dim reduce_deriv_min_high As Float, reduce_deriv_min_pos_high As Long
+  Dim reduce_deriv_max_high As Float, reduce_deriv_max_pos_high As Long
+  MinSpa(reduce_minspa_high, 1280, reduce_sweep_high(1))
+  minpos_high = reduce_minspa_high(2)
+  ' Derivative window is minimum +/- 50, constrained so as the kernel fits.
+  reduce_begin_high = reduce_minspa_high(2) - 50
+  If reduce_begin_high < (1 + 4) Then
+    reduce_begin_high = 1 + 4
+  EndIf
+  reduce_end_high = reduce_minspa_high(2) + 50
+  If reduce_end_high > (1280 - 4) Then
+    reduce_end_high = 1280 - 4
+  EndIf
+  reduce_deriv_max_pos_high = -1
+  reduce_deriv_min_pos_high = -1
+  For reduce_i_high = reduce_begin_high To reduce_end_high
+    ' Compute the derivative using a 9 sample gaussian kernel.
+    reduce_deriv_high =                8 * (reduce_sweep_high(reduce_i_high + 1) - reduce_sweep_high(reduce_i_high - 1))
+    reduce_deriv_high = reduce_deriv_high + 9 * (reduce_sweep_high(reduce_i_high + 2) - reduce_sweep_high(reduce_i_high - 2))
+    reduce_deriv_high = reduce_deriv_high + 5 * (reduce_sweep_high(reduce_i_high + 3) - reduce_sweep_high(reduce_i_high - 3))
+    reduce_deriv_high = reduce_deriv_high + 2 * (reduce_sweep_high(reduce_i_high + 4) - reduce_sweep_high(reduce_i_high - 4))
+    ' Uses >= and < so it's symmetric.
+    If reduce_deriv_max_pos_high < 0 OR reduce_deriv_high >= reduce_deriv_max_high Then
+      reduce_deriv_max_high = reduce_deriv_high
+      reduce_deriv_max_pos_high = reduce_i_high
+    EndIf
+    If reduce_deriv_min_pos_high < 0 OR reduce_deriv_high < reduce_deriv_min_high Then
+      reduce_deriv_min_high = reduce_deriv_high
+      reduce_deriv_min_pos_high = reduce_i_high
+    EndIf
+  Next reduce_i_high
+  Center_Index_high = Round((reduce_deriv_max_pos_high + reduce_deriv_min_pos_high) / 2, 0)
+  Well_Width_high = Round(reduce_deriv_max_pos_high - reduce_deriv_min_pos_high,0)
+EndSub
+
+
+'	Subroutine to rotate the shadowband and determine the diffuse irradiance
+Sub Rotation_mid
+  Dim ZZ_mid(1280), Global_Start_mid, Global_End_mid
+  Dim Total_Start_mid, Total_End_mid, Band_Blocked_Start_mid, Band_Blocked_End_mid
+  Dim I_mid As Long
+  Public Global_band_mid_Prior, Band_Blocked_mid
+  Public Global_Ramping_mid As Boolean
+  Global_Ramping_mid = False
+  Global_band_mid_Prior = Global_band_mid
+  If Global_band_mid <= 1 Then Exit Sub 'Stop rotations for leveling primary or secondary sensor
+  If Batt_Volt < 10.5 Then 'Stop rotations to save battery
+    Diffuse_band_mid = 0.0  
+    Low_Volt_Count_mid = Low_Volt_Count_mid + 1
+    Exit Sub
+  EndIf
+  Rotation_this_Scan_mid = True 'This is set = false at start of each scan
+  Rotation_State_mid = NOT Rotation_State_mid
+  Rot_Count_mid = Rot_Count_mid + 1
+  PortSet(PortBandControl_c_mid, Rotation_State_mid)
+
+  VoltDiff (zz_mid,1280,mV25,-5,false ,1000,250,-249.98,0) 'be careful! channel!!!
+
+  Call Reduce_mid(ZZ_mid())
+  'Process ZZ to get Global_band_mid at beginning and end of rotation
+  AvgSpa(Global_Start_mid, 5, ZZ_mid(1))
+  AvgSpa(Global_End_mid, 5, ZZ_mid(1276))
+  Global_band_mid = 0.5 * (Global_Start_mid + Global_End_mid)
+  If (Well_Width_mid > 40 OR Well_Width_mid < 10 OR _
+    Center_Index_mid - Well_Width_mid - 1 < 1 OR _
+    Center_Index_mid + Well_Width_mid + 1 > 1280 ) Then 'Case of poorly defined well
+    Diffuse_band_mid = Global_band_mid   '???
+    Global_Start_mid = 0.0
+    Global_End_mid = 0.0
+    Band_Blocked_Start_mid = 0.0
+    Band_Blocked_End_mid = 0.0
+    No_Well_Count_mid = No_Well_Count_mid + 1
+  Else 'Case of well defined well; process shoulders of well to determine diffuse blocked
+    I_mid = Center_Index_mid - Well_Width_mid
+    Band_Blocked_Start_mid = (ZZ_mid(I_mid - 1) + 2 * ZZ_mid(I_mid) + ZZ_mid(I_mid + 1)) / 4.
+    I_mid = Center_Index_mid + Well_Width_mid
+    Band_Blocked_End_mid = (ZZ_mid(I_mid - 1) + 2 * ZZ_mid(I_mid) + ZZ_mid(I_mid + 1)) / 4
+    Band_Blocked_mid = 0.5 * (Band_Blocked_Start_mid + Band_Blocked_End_mid)
+    If Band_Blocked_mid > Global_band_mid Then Band_Blocked_mid = Global_band_mid
+    I_mid = Center_Index_mid
+    Diffuse_band_mid = (ZZ_mid(I_mid - 1) + 2 * ZZ_mid(I_mid) + ZZ_mid(I_mid + 1)) / 4 'Average three samples centered in the well
+    Diffuse_band_mid = Diffuse_band_mid + Global_band_mid - Band_Blocked_mid 'Add back the diffuse blocked by the band
+  EndIf
+
+  SweepOffset_mid = Center_Index_mid - 50
+  If SweepOffset_mid < 1 Then SweepOffset_mid = 1
+  If SweepOffset_mid > 1280 - 100 Then SweepOffset_mid = 1280 - 100
+  For I_mid = 1 To 100
+    SweepCenter_mid(I_mid) = ZZ_mid(I_mid + SweepOffset_mid - 1)
+  Next I_mid
+  CallTable(SweepRaw_mid)'???
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub RawScreen_mid
+  '	Preliminary calculation of (raw) direct normal irradiance
+  '	First check and reset small negative values
+  If Global_band_mid > -20.0 AND Global_band_mid < 0.0 Then
+    Global_band_mid = 0.0
+    Diffuse_band_mid = 0.0
+    Direct_band_mid = 0.0
+  EndIf
+  If Diffuse_band_mid > Global_band_mid Then Diffuse_band_mid = Global_band_mid 'Not possible, set equal
+  If SunUp  Then 'Lower limb of sun above horizon
+    Direct_band_mid = (Global_band_mid - Diffuse_band_mid) / CosZen
+  Else
+    Direct_band_mid = 0.0
+    Diffuse_band_mid = Global_band_mid
+  EndIf
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Reduce_mid(reduce_sweep_mid(1280) As Float)
+  Dim reduce_minspa_mid(2)
+  Dim reduce_begin_mid As Long, reduce_end_mid As Long, reduce_i_mid As Long
+  Dim reduce_deriv_mid As Float
+  Dim reduce_deriv_min_mid As Float, reduce_deriv_min_pos_mid As Long
+  Dim reduce_deriv_max_mid As Float, reduce_deriv_max_pos_mid As Long
+  MinSpa(reduce_minspa_mid, 1280, reduce_sweep_mid(1))
+  minpos_mid = reduce_minspa_mid(2)
+  ' Derivative window is minimum +/- 50, constrained so as the kernel fits.
+  reduce_begin_mid = reduce_minspa_mid(2) - 50
+  If reduce_begin_mid < (1 + 4) Then
+    reduce_begin_mid = 1 + 4
+  EndIf
+  reduce_end_mid = reduce_minspa_mid(2) + 50
+  If reduce_end_mid > (1280 - 4) Then
+    reduce_end_mid = 1280 - 4
+  EndIf
+  reduce_deriv_max_pos_mid = -1
+  reduce_deriv_min_pos_mid = -1
+  For reduce_i_mid = reduce_begin_mid To reduce_end_mid
+    ' Compute the derivative using a 9 sample gaussian kernel.
+    reduce_deriv_mid =                8 * (reduce_sweep_mid(reduce_i_mid + 1) - reduce_sweep_mid(reduce_i_mid - 1))
+    reduce_deriv_mid = reduce_deriv_mid + 9 * (reduce_sweep_mid(reduce_i_mid + 2) - reduce_sweep_mid(reduce_i_mid - 2))
+    reduce_deriv_mid = reduce_deriv_mid + 5 * (reduce_sweep_mid(reduce_i_mid + 3) - reduce_sweep_mid(reduce_i_mid - 3))
+    reduce_deriv_mid = reduce_deriv_mid + 2 * (reduce_sweep_mid(reduce_i_mid + 4) - reduce_sweep_mid(reduce_i_mid - 4))
+    ' Uses >= and < so it's symmetric.
+    If reduce_deriv_max_pos_mid < 0 OR reduce_deriv_mid >= reduce_deriv_max_mid Then
+      reduce_deriv_max_mid = reduce_deriv_mid
+      reduce_deriv_max_pos_mid = reduce_i_mid
+    EndIf
+    If reduce_deriv_min_pos_mid < 0 OR reduce_deriv_mid < reduce_deriv_min_mid Then
+      reduce_deriv_min_mid = reduce_deriv_mid
+      reduce_deriv_min_pos_mid = reduce_i_mid
+    EndIf
+  Next reduce_i_mid
+  Center_Index_mid = Round((reduce_deriv_max_pos_mid + reduce_deriv_min_pos_mid) / 2, 0)
+  Well_Width_mid = Round(reduce_deriv_max_pos_mid - reduce_deriv_min_pos_mid,0)
+EndSub
+
+
+'	Subroutine to rotate the shadowband and determine the diffuse irradiance
+Sub Rotation_low
+  Dim ZZ_low(1280), Global_Start_low, Global_End_low
+  Dim Total_Start_low, Total_End_low, Band_Blocked_Start_low, Band_Blocked_End_low
+  Dim I_low As Long
+  Public Global_band_low_Prior, Band_Blocked_low
+  Public Global_Ramping_low As Boolean
+  Global_Ramping_low = False
+  Global_band_low_Prior = Global_band_low
+  If Global_band_low <= 1 Then Exit Sub 'Stop rotations for leveling primary or secondary sensor
+  If Batt_Volt < 10.5 Then 'Stop rotations to save battery
+    Diffuse_band_low = 0.0  
+    Low_Volt_Count_low = Low_Volt_Count_low + 1
+    Exit Sub
+  EndIf
+  Rotation_this_Scan_low = True 'This is set = false at start of each scan
+  Rotation_State_low = NOT Rotation_State_low
+  Rot_Count_low = Rot_Count_low + 1
+  PortSet(PortBandControl_c_low, Rotation_State_low)
+
+  VoltDiff (zz_low,1280,mV25,-5,false ,1000,250,-249.98,0) 'be careful! channel!!!
+
+  Call Reduce_low(ZZ_low())
+  'Process ZZ to get Global_band_low at beginning and end of rotation
+  AvgSpa(Global_Start_low, 5, ZZ_low(1))
+  AvgSpa(Global_End_low, 5, ZZ_low(1276))
+  Global_band_low = 0.5 * (Global_Start_low + Global_End_low)
+  If (Well_Width_low > 40 OR Well_Width_low < 10 OR _
+    Center_Index_low - Well_Width_low - 1 < 1 OR _
+    Center_Index_low + Well_Width_low + 1 > 1280 ) Then 'Case of poorly defined well
+    Diffuse_band_low = Global_band_low   '???
+    Global_Start_low = 0.0
+    Global_End_low = 0.0
+    Band_Blocked_Start_low = 0.0
+    Band_Blocked_End_low = 0.0
+    No_Well_Count_low = No_Well_Count_low + 1
+  Else 'Case of well defined well; process shoulders of well to determine diffuse blocked
+    I_low = Center_Index_low - Well_Width_low
+    Band_Blocked_Start_low = (ZZ_low(I_low - 1) + 2 * ZZ_low(I_low) + ZZ_low(I_low + 1)) / 4.
+    I_low = Center_Index_low + Well_Width_low
+    Band_Blocked_End_low = (ZZ_low(I_low - 1) + 2 * ZZ_low(I_low) + ZZ_low(I_low + 1)) / 4
+    Band_Blocked_low = 0.5 * (Band_Blocked_Start_low + Band_Blocked_End_low)
+    If Band_Blocked_low > Global_band_low Then Band_Blocked_low = Global_band_low
+    I_low = Center_Index_low
+    Diffuse_band_low = (ZZ_low(I_low - 1) + 2 * ZZ_low(I_low) + ZZ_low(I_low + 1)) / 4 'Average three samples centered in the well
+    Diffuse_band_low = Diffuse_band_low + Global_band_low - Band_Blocked_low 'Add back the diffuse blocked by the band
+  EndIf
+
+  SweepOffset_low = Center_Index_low - 50
+  If SweepOffset_low < 1 Then SweepOffset_low = 1
+  If SweepOffset_low > 1280 - 100 Then SweepOffset_low = 1280 - 100
+  For I_low = 1 To 100
+    SweepCenter_low(I_low) = ZZ_low(I_low + SweepOffset_low - 1)
+  Next I_low
+  CallTable(SweepRaw_low)'???
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub RawScreen_low
+  '	Preliminary calculation of (raw) direct normal irradiance
+  '	First check and reset small negative values
+  If Global_band_low > -20.0 AND Global_band_low < 0.0 Then
+    Global_band_low = 0.0
+    Diffuse_band_low = 0.0
+    Direct_band_low = 0.0
+  EndIf
+  If Diffuse_band_low > Global_band_low Then Diffuse_band_low = Global_band_low 'Not possible, set equal
+  If SunUp  Then 'Lower limb of sun above horizon
+    Direct_band_low = (Global_band_low - Diffuse_band_low) / CosZen
+  Else
+    Direct_band_low = 0.0
+    Diffuse_band_low = Global_band_low
+  EndIf
+EndSub
+'-----------------------------------------------------------------------------------------
+Sub Reduce_low(reduce_sweep_low(1280) As Float)
+  Dim reduce_minspa_low(2)
+  Dim reduce_begin_low As Long, reduce_end_low As Long, reduce_i_low As Long
+  Dim reduce_deriv_low As Float
+  Dim reduce_deriv_min_low As Float, reduce_deriv_min_pos_low As Long
+  Dim reduce_deriv_max_low As Float, reduce_deriv_max_pos_low As Long
+  MinSpa(reduce_minspa_low, 1280, reduce_sweep_low(1))
+  minpos_low = reduce_minspa_low(2)
+  ' Derivative window is minimum +/- 50, constrained so as the kernel fits.
+  reduce_begin_low = reduce_minspa_low(2) - 50
+  If reduce_begin_low < (1 + 4) Then
+    reduce_begin_low = 1 + 4
+  EndIf
+  reduce_end_low = reduce_minspa_low(2) + 50
+  If reduce_end_low > (1280 - 4) Then
+    reduce_end_low = 1280 - 4
+  EndIf
+  reduce_deriv_max_pos_low = -1
+  reduce_deriv_min_pos_low = -1
+  For reduce_i_low = reduce_begin_low To reduce_end_low
+    ' Compute the derivative using a 9 sample gaussian kernel.
+    reduce_deriv_low =                8 * (reduce_sweep_low(reduce_i_low + 1) - reduce_sweep_low(reduce_i_low - 1))
+    reduce_deriv_low = reduce_deriv_low + 9 * (reduce_sweep_low(reduce_i_low + 2) - reduce_sweep_low(reduce_i_low - 2))
+    reduce_deriv_low = reduce_deriv_low + 5 * (reduce_sweep_low(reduce_i_low + 3) - reduce_sweep_low(reduce_i_low - 3))
+    reduce_deriv_low = reduce_deriv_low + 2 * (reduce_sweep_low(reduce_i_low + 4) - reduce_sweep_low(reduce_i_low - 4))
+    ' Uses >= and < so it's symmetric.
+    If reduce_deriv_max_pos_low < 0 OR reduce_deriv_low >= reduce_deriv_max_low Then
+      reduce_deriv_max_low = reduce_deriv_low
+      reduce_deriv_max_pos_low = reduce_i_low
+    EndIf
+    If reduce_deriv_min_pos_low < 0 OR reduce_deriv_low < reduce_deriv_min_low Then
+      reduce_deriv_min_low = reduce_deriv_low
+      reduce_deriv_min_pos_low = reduce_i_low
+    EndIf
+  Next reduce_i_low
+  Center_Index_low = Round((reduce_deriv_max_pos_low + reduce_deriv_min_pos_low) / 2, 0)
+  Well_Width_low = Round(reduce_deriv_max_pos_low - reduce_deriv_min_pos_low,0)
+EndSub
+
+'-----------------------------------------------------------------------------------------
+Sub Reset
+  Rot_Count_over = 0 'reset daily counters and set special application flags False
+  Rot_Count_high = 0
+  Rot_Count_mid = 0
+  Rot_Count_low = 0
+
+  Low_Volt_Count_over = 0
+  Low_Volt_Count_high = 0
+  Low_Volt_Count_mid = 0
+  Low_Volt_Count_low = 0
+
+  No_Well_Count_over = 0
+  No_Well_Count_high = 0
+  No_Well_Count_mid = 0
+  No_Well_Count_low = 0
+
+  '  Cleaning = False
+  SweepData_over = False
+  SweepData_high = False
+  SweepData_mid = False
+  SweepData_low = False
+EndSub
+'================================ END PROTECTED CODE =====================================
+'	Main Program
+BeginProg
+  'Initialization in multiple steps
+  Start_Sequence = True
+
+  Delay(1, 5, Sec)
+  Lat = Lat_c 'Initialize position and altitude with user setup values
+  Lon = Lon_c
+  Alt = Alt_c
+  Call Time_Location_SunPos 'Start using GPS to set time and place
+
+  Battery(Batt_Volt)
+
+  'Preliminary Setup and assignment of variable names to site constants
+  Call Reset
+
+  '  CleanScans = CleanTime_c / Scan_c
+
+  Delay(1, 5, Sec)
+
+  VoltDiff (Global_ref_over,1,mV250,1,True ,0,_60Hz,5,0)
+  VoltDiff (Global_ref_high,1,mV25,2,True ,0,_60Hz,243.1197,0)
+  VoltDiff (Global_ref_mid,1,mV25,3,True ,0,_60Hz,239.6013,0)
+  VoltDiff (Global_ref_low,1,mV25,4,True ,0,_60Hz,224.3410,0)
+
+  VoltDiff (Global_band_over,1,mV25,5,True ,0,_60Hz,-266.48,0)
+  VoltDiff (Global_band_high,1,mV25,6,True ,0,_60Hz,-252.64,0)
+  VoltDiff (Global_band_mid,1,mV25,7,True ,0,_60Hz,-259.18,0)
+  VoltDiff (Global_band_low,1,mV25,8,True ,0,_60Hz,-249.98,0)
+
+  Call Rotation_over
+  Call Rotation_high
+  Call Rotation_mid
+  Call Rotation_low
+
+  Call RawScreen_over
+  Call RawScreen_high
+  Call RawScreen_mid
+  Call RawScreen_low
+
+  '  Call Corrections
+  Start_Sequence = False
+  '=======================================================================================
+  '=======================================================================================
+  Scan(Scan_c, Sec, 1, 0) 'Constant 3 or 5 second scan time for main program
+    '=====================================================================================
+    Rotation_this_Scan_over = False 'Used to keep track of no_well rotations
+    Rotation_this_Scan_high = False 'Used to keep track of no_well rotations
+    Rotation_this_Scan_mid = False 'Used to keep track of no_well rotations
+    Rotation_this_Scan_low = False 'Used to keep track of no_well rotations
+
+    '    PulseCount(Pulse2, 1, 2, 2, 0, 1, 0) 'Watch for switch closure requesting cleaning event
+    If Panel_Temp < 5 Then Freeze = True Else Freeze = False   
+    'in case logger temp is lower than 5 degC, making band rotate every 30 minute at night 
+     'to prevent from freezing
+     
+
+    '    If Pulse2 > 0 AND NOT Cleaning Then CleanRequest = True
+    '    If CleanRequest Then 'Start cleaning sequence
+    '      'Measured Global before cleaning
+    '      VoltSe (Pre_Clean, 1, mV25, SEChanPrimary_c, False, 0, 250, LiCor_Cal, 0)
+    '      CleanCount = -1
+    '      Cleaning = True
+    '      CleanRequest = False
+    '    EndIf
+    '    If Cleaning Then
+    '      CleanCount = CleanCount + 1
+    '      If CleanCount >= CleanScans Then
+    '        'Measure Global post cleaning
+    '        VoltSe(Post_Clean, 1, mV25, SEChanPrimary_c, False, 0, 250, LiCor_Cal, 0)
+    '        Cleaning = False
+    '        CallTable _Clean
+    '      EndIf
+    '    EndIf
+    '=====================================================================================
+    '    If NOT Cleaning Then 'Start of routine measurment code (not cleaning)
+
+    VoltDiff (Global_ref_over,1,mV250,1,True ,0,_60Hz,5,0)  '??? name change needs
+    VoltDiff (Global_ref_high,1,mV25,2,True ,0,_60Hz,243.1197,0)
+    VoltDiff (Global_ref_mid,1,mV25,3,True ,0,_60Hz,239.6013,0)
+    VoltDiff (Global_ref_low,1,mV25,4,True ,0,_60Hz,224.3410,0)
+
+    '      EndIf
+
+
+    VoltDiff (Global_band_over,1,mV25,5,True ,0,_60Hz,-266.48,0)
+    '	Code to detect rapid sunlight change and trigger an extra band rotation
+    If ABS(Global_band_over - Global_band_over_Prior) > 40 Then Global_Ramping_over = True
+    ' Update diffuse measurement as needed
+    If SunUp AND (Global_Ramping_over OR TimeIntoInterval(0, 30, Sec)) Then
+      Call Rotation_over	'Rotate to measure diffuse sunlight
+    EndIf
+
+
+    VoltDiff (Global_band_high,1,mV25,6,True ,0,_60Hz,-252.64,0)
+    If ABS(Global_band_high - Global_band_high_Prior) > 40 Then Global_Ramping_high = True
+    If SunUp AND (Global_Ramping_high OR TimeIntoInterval(0, 30, Sec)) Then
+      Call Rotation_high
+    EndIf
+
+    VoltDiff (Global_band_mid,1,mV25,7,True ,0,_60Hz,-259.18,0)
+    If ABS(Global_band_mid - Global_band_mid_Prior) > 40 Then Global_Ramping_mid = True
+    If SunUp AND (Global_Ramping_mid OR TimeIntoInterval(0, 30, Sec)) Then
+      Call Rotation_mid
+    EndIf
+
+    VoltDiff (Global_band_low,1,mV25,8,True ,0,_60Hz,-249.98,0)
+    If ABS(Global_band_low - Global_band_low_Prior) > 40 Then Global_Ramping_low = True
+    If SunUp AND (Global_Ramping_low OR TimeIntoInterval(0, 30, Sec)) Then
+      Call Rotation_low
+    EndIf
+
+    If NOT(SunUp) AND TimeIntoInterval(0, 30, Min) AND Freeze Then
+      'Exercise band at night when cold
+      Rotation_State_over = NOT Rotation_State_over
+      Rotation_State_high = NOT Rotation_State_high
+      Rotation_State_mid = NOT Rotation_State_mid
+      Rotation_State_low = NOT Rotation_State_low
+
+      Rot_Count_over = Rot_Count_over + 1
+      Rot_Count_high = Rot_Count_high + 1
+      Rot_Count_mid = Rot_Count_mid + 1
+      Rot_Count_low = Rot_Count_low + 1
+
+      PortSet(PortBandControl_c_over, Rotation_State_over)
+      PortSet(PortBandControl_c_high, Rotation_State_high)
+      PortSet(PortBandControl_c_mid, Rotation_State_mid)
+      PortSet(PortBandControl_c_low, Rotation_State_low)
+    EndIf
+    
+    Call RawScreen_over
+    Call RawScreen_high
+    Call RawScreen_mid
+    Call RawScreen_low
+
+    CallTable SweepData_over
+    CallTable SweepData_high
+    CallTable SweepData_mid
+    CallTable SweepData_low
+    
+    CallTable _01_Min
+    CallTable _01_Hour
+    CallTable _01_Day
+        
+  NextScan
+  SlowSequence
+  Scan(SlowScan_c, Sec, 3, 0)
+    Call Time_Location_SunPos
+    Battery(Batt_Volt)
+    PanelTemp(Panel_Temp, 250)
+
+    'Code to reset time and daily counters just after local midnight
+    If TimeIntoInterval(MidnightMin_c, 1440, Min) Then
+      Call Reset
+    EndIf
+  NextScan
+EndProg

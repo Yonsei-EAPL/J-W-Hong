@@ -1,0 +1,368 @@
+'CR1000 Series Datalogger
+
+Public Flag(3)  As Boolean 'DECLARATIONS
+Public State4  As Boolean
+Public Reset As Boolean 
+Public Sample_ct As Long
+Public wind_u, wind_v, wind_w, T 
+Public u_bar, v_bar, w_bar, T_bar 
+Public sumU, sumV, sumW, sumT 
+Public TC As Long, ERR As Long, ERRFLO As Long
+Public wbar_0, stdev_wprime, wprime, stdev_wprime_0, K, flow, status
+Public V(5), Tup_bar, Tdown_bar, Tneutral_bar, caltime, threshold, counter3, counter2
+Public V_up, V_neut, V_down
+Public upcount As Long, downcount As Long, Ncount As Long 
+Public Tdown, Tup, Tneutral
+Public b, flow_up, flow_down, flow_neut
+Public battvolt, Ntime, uptime, downtime, wspd, wdir
+Public lastState, UptoNeut, DntoNeut, Vswitch As Long
+
+'sonic anemometer serial acquisiton
+Public raw As String *43
+Public tout(6) As String *10
+'Covariances
+Dim cov_out(3)
+'Aliases for covariances.
+Alias cov_out(2) = cov_T_wprime
+Alias cov_out(3) = var_wprime
+'Working variables.
+Dim cov_array(1,3)	'Arrays used to hold the input data for the covariance instructions.
+Dim n(6)
+
+DataTable(dataout,true,-1) ' OUTPUT SECTION
+  OpenInterval       
+  DataInterval(0,30,Min,0) 
+  CardOut (0 ,-1)                   
+  Sample(1, upcount, Long)
+  Sample(1, downcount, Long)
+  Sample(1, Ncount, Long)
+  Sample(1, TC, Long)
+  Sample(1, Tup_bar, IEEE4)
+  Sample(1, Tdown_bar, IEEE4)
+  Sample(1, Tneutral_bar, IEEE4)
+  Sample(1, V_up, IEEE4)
+  Sample(1, V_down, IEEE4)
+  Sample(1, V_neut, IEEE4)
+  Sample(1, b, IEEE4)
+  Sample(1, battvolt, IEEE4)
+  Sample(1, u_bar, IEEE4)
+  Sample(1, v_bar, IEEE4)
+  Sample(1, w_bar, IEEE4)
+  Sample(1, T_bar, IEEE4)
+  Sample(1, wspd, IEEE4)
+  Sample(1, wdir, IEEE4)
+  Sample(2, cov_out(2),IEEE4)
+  Sample (1,stdev_wprime,IEEE4)
+  Sample(1, ERR, Long)
+  Sample(1, ERRFLO, Long)
+  Sample(1, Vswitch, Long)
+  Sample(1, UptoNeut, Long)
+  Sample(1, DntoNeut, Long)
+EndTable
+
+'*************** TEST DATATABLE **********************************
+'DataTable(test,TRUE,-1)
+  'Sample(1, T, IEEE4)
+  'Sample(1, wind_u, IEEE4)
+  'Sample(1, wind_v, IEEE4)
+  'Sample(1, wind_w, IEEE4)
+ ' Sample(1, flow_up, IEEE4)
+  'Sample(1, flow_down, IEEE4)
+  'Sample(1, flow_neut, IEEE4)
+  'Sample(1, status, FP2)
+  'Sample(1, V(5), IEEE4)
+  'Sample(1, flow, IEEE4)
+'EndTable
+
+'*** Working Data Tables ***
+'Compute the flux covariances and the other cross products required to rotate the data into natural wind coordinates.
+DataTable (comp_cov,TRUE,-1)
+	DataInterval (0,30,Min,0)
+	CardOut (0 ,-1)
+	Covariance (2,cov_array(1,1),IEEE4,False,3)
+EndTable
+AngleDegrees 
+
+'Define Subroutines   \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+	Sub Subroutine1
+			Flag(1) = True'only For the first run of this program
+			PortSet (1,1)' Turns on bypass
+			PortSet (2,1)
+			PortSet (3,0)
+			PortSet (4,1)
+			PortSet (5,0)
+			PortSet (6,0)
+			wbar_0 = 0 ' sets wbar=0, sigma w = 0.6 - initializes counting variables (=0)
+    	stdev_wprime_0 = 0.6
+      K = 0.6
+      upcount = 0
+      downcount = 0
+      Ncount = 0
+      TC = 0
+      Tup = 0
+      Tdown = 0
+      Tneutral = 0
+      sumU = 0
+      sumV = 0
+      sumW = 0
+      sumT = 0
+      cov_T_wprime = 0
+      var_wprime = 0
+      ERR = 0
+      ERRFLO = 0
+       Vswitch = 0
+       UptoNeut = 0
+       DntoNeut = 0
+       lastState = 3
+	EndSub
+'\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\	
+	Sub Subroutine2 'data storage every 30 minutes
+		Timer(0,usec,2)
+		'PortSet (4,1)'open neutral line - turns pump off
+		PortSet (3,1)
+		PortSet (2,1)
+		PortSet (1,1)
+		stdev_wprime_0 = 50
+	'calculate b coefficient  b = cov(T'w')/( sigma w.(Tupbar - Tdownbar))
+	'cov(Tw)=cov(T'w')
+	'calculate the mean of up temperature
+    Tup_bar = Tup / upcount
+	'calculate the mean of down and neutral temperature
+    Tdown_bar = Tdown / downcount
+    Tneutral_bar = Tneutral / Ncount
+    stdev_wprime = SQR(var_wprime)
+    b = cov_T_wprime / ((Tup_bar - Tdown_bar) * stdev_wprime)
+  'averaging wind speeds and temperature
+			u_bar = sumU/TC
+      v_bar = sumV/TC
+      w_bar = sumW/TC
+      T_bar = sumT/TC  
+      ' get wind speed
+      wspd = SQR (u_bar^2 + v_bar^2)
+     'get wind direction
+     wdir = ATN2 (v_bar,u_bar)
+     ' wind direction relative to sonic - if "N" on sonic is oriented north - 
+     ' then = wind direction    
+	'convert up/down/Neut. cts in seconds
+    uptime = upcount * 0.1
+    downtime = downcount * 0.1
+    Ntime = Ncount * 0.1
+	'convert flow to volumne
+    V_up = flow_up * 0.1
+    V_down = flow_down * 0.1
+    V_neut = flow_neut * 0.1
+    Flag(2) = True  
+    counter2 = 0
+    'Added stuff for Shertz REA
+    If Reset = True Then
+      'if we have manually "reset" - start sampling
+      Sample_ct = Sample_ct + 1
+       ' Bypass Off
+       PortSet (4 ,0)
+      EndIf
+      
+   Select Case Sample_Ct
+     Case 1
+         'Address
+       PortSet(5,1)
+       PortSet(6,0)       
+     Case 2
+       PortSet(5,0)
+       PortSet(6,1)
+    Case 3
+         PortSet(5,1)
+         PortSet(6,1)
+    Case 4
+         PortSet(5,0)
+         PortSet(6,0)
+         Sample_Ct = 0
+         Reset = False
+          PortSet(4 ,1)
+            PortSet(3,0)
+            
+   EndSelect 
+      
+                
+  EndSub
+'\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\	
+	Sub Subroutine3 'reset parameters for a new 30 minutes period
+		If Flag(2)= True Then
+			'reset with the data from the last period
+			stdev_wprime_0 = stdev_wprime
+			wbar_0 = w_bar
+			'turn pump back on
+			'PortSet(4,0)
+			PortSet(3,0)
+			'reset counters to zero
+			upcount = 0
+			downcount = 0
+			Ncount = 0
+			TC = 0
+			sumU = 0
+      sumV = 0
+      sumW = 0
+      sumT = 0
+			Tup = 0
+			Tdown = 0
+			Tneutral = 0
+	counter2 = 0
+	
+		  flow_up = 0
+		  flow_down = 0
+		  flow_neut = 0
+		  Flag(2) = False
+		  ERR = 0
+		  ERRFLO = 0
+		Vswitch = 0
+		UptoNeut = 0
+		DntoNeut = 0
+		counter3 = 0
+	  EndIf 
+	EndSub
+'\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+BeginProg
+		Timer(0,uSec,0) 
+		counter3 = 0  
+		counter2 = 0 
+		flag(1) = False
+		flag(2) = False
+		Reset = False
+		Sample_Ct = 0
+		SerialOpen(com4, 38400, 0, 0, 2000)
+		Scan(100,mSec, 3, 0)
+    If  Flag(1) = False Then Subroutine1' Initiation sequence - first time through only.     
+'reading sonic serial output
+    SerialIn(raw,com4,10,13,42)
+    SplitStr(tout(1), raw, CHR(32), 6, 0)
+'converting string to numeric
+  	n(1) = tout(1)
+  	n(2) = tout(2)
+  	n(3) = tout(3)
+  	n(4) = tout(4)
+  	n(5) = tout(5)
+  	n(6) = tout(6)
+  	ERR = ERR + 1
+'check if data are valid
+		If n(1) < 360 Then
+			If n(1) > 300 Then
+		  	If n(6) = 0 Then
+				'converting string to numeric
+  					wind_u = tout(2)
+  					wind_v = tout(3)
+  					wind_w = tout(4)
+  					T = tout(5)
+  					ERR = ERR - 1
+      	EndIf
+      EndIf
+		EndIf
+' V(5) voltages for the sample flow measurement
+    VoltDiff(V(1), 5, mV5000, 1, True, 0, 100, 0.001, 0) 
+    Battery(battvolt)
+    n(6) = (V(5)*1.66667)+ 0.000807 ' units are sccm converted to cm3 s-1
+    ERRFLO = ERRFLO + 1 'count errors on flow value
+'control on flow value, avoid NAN for flow sums    	
+    	If n(6) > -10 Then
+    		If n(6) < 20 Then
+    			flow = n(6) 
+    			ERRFLO = ERRFLO - 1
+    		EndIf
+    	EndIf 
+    	
+'valves control : (port 1: up valve),(port 2: down valve), (port 3: neutral valve)
+' status == 1, up == 2, down, == 3, neutral
+'calculate the threshold
+    threshold = stdev_wprime_0 * K	 
+'calculate w'
+    wprime = wind_w - wbar_0
+' calculating averages
+    sumU = wind_u + sumU
+    sumV = wind_v + sumV
+    sumW = wind_w + sumW
+    sumT = T + sumT
+    TC = TC + 1 
+    
+ PortGet (State4,4)
+    If (State4 = 0) Then 
+'up valve control
+    If (threshold < wprime) Then                                  
+      PortSet(1, 0)              
+      PortSet(2, 1)              
+      PortSet(3, 0)              
+    EndIf
+'down valve control
+    If (wprime < (threshold * -1)) Then                                  
+      PortSet(1, 1)              
+      PortSet(2, 0)              
+      PortSet(3, 0)              
+    EndIf
+'neutral valve
+    If ((ABS(wprime)) < threshold) Then                                  
+      PortSet(1, 1)              
+      PortSet(2, 1)              
+      PortSet(3, 1)              
+    EndIf 
+  
+   EndIf 
+   'end of valve control
+    
+   'up calculations
+    If (threshold < wprime) Then                                  
+      status = 1
+      upcount = upcount + 1
+      Tup = T + Tup
+      flow_up = flow + flow_up
+    EndIf
+'down calculatios
+    If (wprime < (threshold * -1)) Then                                             
+      status = 2
+      downcount = downcount + 1
+      Tdown = T + Tdown
+      flow_down = flow + flow_down
+    EndIf
+'neutral calculations
+    If ((ABS(wprime)) < threshold) Then                                  
+      status = 3
+      Ncount = Ncount + 1
+      Tneutral = Tneutral + T
+      flow_neut = flow + flow_neut
+    EndIf 
+
+'Sum up eddy reversal terms
+   If (lastState = 3 and status = 1 ) Then                                  
+      UptoNeut = UptoNeut + 1
+    EndIf 
+   If (lastState = 3 and status = 2 ) Then                                  
+      DntoNeut = DntoNeut + 1
+    EndIf 
+   If (lastState <> status) Then                                  
+      Vswitch = Vswitch + 1
+    EndIf 
+ 
+ lastState = status
+ 'counter3 = counter3 + 1
+counter2 = counter2 + 1
+
+'Load the arrays that hold the input data for the covariance instructions.
+    cov_array(1,1) = T
+		Move (cov_array(1,2),1,wprime,1)
+    'Compute the online covariances.
+				CallTable comp_cov
+    		cov_out(2) = comp_cov.cov_array_cov(2,1)
+    		cov_out(3) = comp_cov.cov_array_cov(3,1)
+    		
+    If  TimeIntoInterval(0,30,Min) Then 
+    	Subroutine2       
+    	CallTable dataout
+    EndIf
+    
+    'Output test datas
+    	'CallTable test 
+    	caltime=Timer(0,Sec,4)
+'reset parameters and cartridges change for a 2 minutes period
+'For Shertz REA - set to 1 sec.  For old REA - set to 120 (2 min).
+    If (caltime >= 1) Then Subroutine3 
+
+
+      
+  NextScan
+EndProg

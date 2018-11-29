@@ -1,0 +1,1048 @@
+'CR3000 Series Datalogger
+
+'Copyright (c) 2002, 2006, 2010 Campbell Scientific, Inc. All rights reserved.
+
+'31 Oct 11
+'version 3.0
+
+
+
+'*** Wiring ***
+
+'SDM INPUT
+'SDM-C1         CSAT3A/EC150 SDM Data (green)
+'SDM-C2         CSAT3A/EC150 SDM Clock (white)
+'SDM-C3         CSAT3A/EC150 SDM Enable (brown)
+'G                  CSAT3A/EC150 SDM reference (black)
+'                   CSAT3A/EC150 SDM shield (clear)
+
+
+'POWER IN
+'12V              datalogger (red)
+'G                  datalogger (black)
+
+
+'EXTERNAL POWER SUPPLY
+'POS              CSAT3A/EC150 power (red)
+'                   datalogger (red)
+'NEG              CSAT3A/EC150 power reference (black)
+'                   CSAT3A/EC150 power shield (clear)
+'                   datalogger (black)
+
+
+'hmp155a
+'yellow - se27
+'blue - se28
+'red - 12v
+'white/black/clear - G
+
+'CNR4
+'CM3 up   red - SE1 , blue - se2
+'CM3 dn   white - SE3, black - se4
+'CG3 up  grey - SE5, yellow - se6
+'CG3 dn  brown - SE7, green - se8
+'
+'CNR4 PRT100 temperature sensor
+'green - IX1
+'brown - IXR
+'grey - SE9
+'yellow - SE10
+
+'CNR4 heater ; not used
+'black - 12V
+'white - G
+
+'Start of Constants Customization Section
+
+' The sign convention for the fluxes is positive away from the surface and
+'negative towards the surface.
+'
+' Before computing online fluxes, the datalogger will introduce lags into the
+'eddy covariance data to account for the fixed instrument delays. The lags are
+'dependent on the instrument setting and/or the scan interval. Search for "Fixed
+'inherent lag" and set the delay to the appropriate value. The raw data is not
+'lagged.
+'
+' The site attendant must load in several constants and calibration values.
+'Search for the text string "unique" to find the locations where unique
+'constants and calibration values are entered.
+
+
+'*** Unit Definitions ***
+
+'Symbol   Units
+'C        Celsius
+'degrees  degrees (angle)
+'g        grams
+'J        Joules
+'kg       kilograms
+'kPa      kilopascals
+'m        meters
+'mg       milligrams
+'mmol     millimoles
+'mol      moles
+'s        seconds
+'umol     micromols
+'V        volts
+'W        Watts
+
+'Program the GPS16-HVS to use 38.4 kbaud, no parity, 8 data bits, and 1 stop bit
+'*** Wiring ***
+'CONTROL PORTS
+
+'C3   GPS16-HVS pulse per second (gray)
+'C4   GPS16-HVS RS-232 TxD (white)
+'G    yellow, blue, shield
+
+'POWER OUT
+
+'12V  GPS16-HVS power (red)
+'G    GPS16-HVS power and RS-232 signal reference (black)
+
+
+Const LOCAL_TIME_OFFSET = 9            'Local time offset relative to UTC time
+
+ 
+
+Dim nmea_sentence(2) As String * 90
+Public gps_data(15)
+Alias gps_data(1) = latitude_a          'Degrees latitude (+ = North; - = South)
+Alias gps_data(2) = latitude_b          'Minutes latitude
+Alias gps_data(3) = longitude_a         'Degress longitude (+ = East; - = West)
+Alias gps_data(4) = longitude_b         'Minutes longitude
+Alias gps_data(5) = speed               'Speed
+Alias gps_data(6) = course       'Course over ground
+Alias gps_data(7) = magnetic_variation  'Magnetic variation from true north (+ = East; - = West)
+Alias gps_data(8) = fix_quality         'GPS fix quality: 0 = invalid, 1 = GPS, 2 = differential GPS, 6 = estimated
+Alias gps_data(9) = nmbr_satellites     'Number of satellites used for fix
+Alias gps_data(10) = altitude           'Antenna altitude
+Alias gps_data(11) = pps                'usec into sec of system clock when PPS rising edge occurs, typically 990,000 once synced
+Alias gps_data(12) = dt_since_gprmc     'Time since last GPRMC string, normally less than 1 second
+Alias gps_data(13) = gps_ready          'Counts from 0 to 10, 10 = ready
+Alias gps_data(14) = max_clock_change   'Maximum value the clock was changed in msec
+Alias gps_data(15) = nmbr_clock_change  'Number of times the clock was changed
+
+'Define Units to be used in data file header
+
+Units latitude_a = degrees
+Units latitude_b = minutes
+Units longitude_a = degrees
+Units longitude_b = minutes
+Units speed = m/s
+Units course = degrees
+Units magnetic_variation = unitless
+Units fix_quality = unitless
+Units nmbr_satellites = unitless
+Units altitude = m
+Units pps = ms
+Units dt_since_gprmc = s
+Units gps_ready = unitless
+Units max_clock_change = ms
+Units nmbr_clock_change = samples
+
+
+
+Const EC100_SDM_ADDR = 1               'Unique SDM address for EC100.
+
+
+PipeLineMode
+
+'*** General constants and variables ***
+Const SCAN_INTERVAL = 50   'Unique value, measurement rate 100 ms (10 Hz), 40 ms (25 Hz), or 50 (20 Hz).
+Const OUTPUT_INTERVAL = 30 'Unique value, online flux data output interval in minutes.
+Const SDM_PER = 30         'Unique value, default SDM clock speed.
+
+Const OFFSET = 17                                        'An offset delay that will be introduced to the eddy covariance data used to compute online fluxes.
+Const SCAN_BUFFER_SIZE = 60*INT (1000/SCAN_INTERVAL)     'Compute a 60 second scan buffer.
+Const NUM_DAY_CPU = 7                                    'Number of days of data to store on the CPU.
+Const FLUX_SIZE_CPU = (NUM_DAY_CPU*1440)/OUTPUT_INTERVAL 'Size of flux data table on CPU [days].
+
+Const MU_WPL = 29/18                                     'Ratio of the molecular weight of dry air to that of water vapor.
+Const R = 8.3143e-3                                      'Universal gas constant [kPa m^3/(K mol)].
+Const RD = R/29                                          'Gas constant for dry air [kPa m^3/(K g)].
+Const LV = 2440                                          'Estimate of the latent heat of vaporization [J/g].
+Const RV = R/18                                          'Gas constant for water vapor [kPa m^3/(K g)].
+
+Dim dly_data_out(7)                                      'Array used to temporarily store the lagged record.
+
+'Other measurements.
+Public panel_tmpr
+Public batt_volt
+Units panel_tmpr = C
+Units batt_volt = V
+
+'Program working variables.
+Dim scan_count As Long                                   'Number scans executed.
+Dim slowsequence_finished_f As Boolean                   'Flag used to indicate the SlowSequence has finished its scan.
+Dim slowsequence_disable_f As Boolean = TRUE             'Flag used to decimate statistics in main scan.
+Dim sys_conf_var_file As Long                            'Filehandle for the file that contains the system configuration variables in the CPU.
+Dim i As Long                                            'Main scan index variable.
+Dim ii As Long                                           'Slow sequence scan index variable.
+Dim n = 1
+Units n = samples
+
+
+'*** Beginning of EC100 configure, zero, and span constants and variables, and subroutine ***
+Const BANDWIDTH = 20            '20 = 20 Hz
+Const DIFFERENTIAL_PRESSURE = 0 '0 = disabled
+Const TEMPERATURE_SOURCE = 0    '0 = ambient temperature sensor
+Const BB = 0                    'BB = EC100 basic pressure transducer
+Const EB = 2                    'EB = EC100 enhanced pressure transducer
+
+Public CO2_span_gas
+Public Td_span_gas
+
+Dim config_array(3,2) = {0,BANDWIDTH,3,DIFFERENTIAL_PRESSURE,7,TEMPERATURE_SOURCE}
+Dim power_array (1,2) = {21,0}
+Dim press_source_array(1,2) = {2,0}   'Pressure source,basic pressure transducer (default).
+Dim zero_array(1,2) = {11,1}          'Zero/Span command,set zero value.
+Dim span_CO2_array(2,2) = {12,0,11,2} 'CO2 span concentration,0; Zero/Span command,set CO2 span value (default).
+Dim span_H2O_array(2,2) = {13,0,11,3} 'H2O span dew point temperature,0; Zero/Span command,set H2O span value (default).
+Dim config_result As Long
+
+Public set_press_source_f As Boolean
+Public do_zero_f As Boolean
+Public do_CO2_span_f As Boolean
+Public do_H2O_span_f As Boolean
+Dim configure_ec100_f As Boolean = TRUE
+Dim ec150_power_f As Boolean
+Dim NAN_cnt As Long
+Dim retry_config_f As Boolean
+
+
+Sub Config (cmd_array(4,2),num_cmd As Long,retry_config_f As Boolean)
+  Dim i As Long
+  Dim config_result As Long
+  Dim save_flash_f As Boolean = FALSE
+
+  For i = 1 To num_cmd
+    EC100Configure (config_result,1,cmd_array(i,1),cmd_array(i,2))
+    If ( config_result = NAN ) Then ( ExitFor )
+    If ( (cmd_array(i,1) = 2) OR (cmd_array(i,1) = 11) ) Then ( save_flash_f = TRUE )
+  Next i
+
+  If ( i = num_cmd+1 ) Then
+    If ( save_flash_f ) Then ( EC100Configure (config_result,EC100_SDM_ADDR,99,2718) )
+    If ( config_result <> NAN ) Then ( retry_config_f = FALSE )
+  EndIf
+
+  SetStatus ("SkippedScan",0)
+EndSub
+'*** End of EC100 configure, zero, and span constants and variables, and subroutine ***
+
+
+'*** Beginning of CSAT3A sonic head constants, variables, and working data table ***
+Const CP = 1004.67                         'Estimate of heat capacity of air [J/(kg K)].
+
+Public sonic(5)
+Alias sonic(1) = Ux
+Alias sonic(2) = Uy
+Alias sonic(3) = Uz
+Alias sonic(4) = Ts
+Alias sonic(5) = diag_sonic
+
+Public diag_bits_sonic(6) As Boolean       'Sonic warning flags.
+Public sonic_azimuth                       'Enter sonic azimuth using keyboard after program has compiled (azimuth of the CSAT3(A) negative x-axis see Section 3.2.1 CSAT3A Azimuth in the OPEC manual).
+Alias diag_bits_sonic(1) = amp_l_f         'Amplitude low warning flag.
+Alias diag_bits_sonic(2) = amp_h_f         'Amplitude high warning flag.
+Alias diag_bits_sonic(3) = sig_lck_f       'Poor signal lock warning flag.
+Alias diag_bits_sonic(4) = del_T_f         'Delta temperature warning flag.
+Alias diag_bits_sonic(5) = aq_sig_f        'Sonic acquiring signals warning flag.
+Alias diag_bits_sonic(6) = sonic_cal_err_f 'Signature error in reading CSAT3A sonic head calibration data.
+Units diag_bits_sonic = arb
+Units sonic_azimuth = degrees
+
+Dim sonic_irga_raw(12)                     'EC150 w/CSAT3A sonic head (not lagged).
+
+Dim diag_sonic_tmp As Long                 'Temporary variable used to break out the CSAT3A sonic head diagnostic bits.
+Dim sonic_disable_f As Boolean             'TRUE when CSAT3A sonic head diagnostic warning flags are on or CSAT3A sonic head has not sent data or an SDM signature error is reported.
+Dim Ts_absolute                            'Sonic temperature (K).
+Dim sonic_azimuth_prev
+
+Dim cov_array_sonic(1,4)                   'Arrays used to hold the input data for the covariance instructions (CSAT3A sonic head).
+Dim cov_out_sonic(18)                      'CSAT3A sonic head statistics.
+Alias cov_out_sonic(1) = Hs                'Sensible heat flux using sonic temperature.
+Alias cov_out_sonic(2) = tau               'Momentum flux.
+Alias cov_out_sonic(3) = u_star            'Friction velocity.
+Alias cov_out_sonic(4) = Ts_stdev
+Alias cov_out_sonic(5) = Ts_Ux_cov
+Alias cov_out_sonic(6) = Ts_Uy_cov
+Alias cov_out_sonic(7) = Ts_Uz_cov
+Alias cov_out_sonic(8) = Ux_stdev
+Alias cov_out_sonic(9) = Ux_Uy_cov
+Alias cov_out_sonic(10) = Ux_Uz_cov
+Alias cov_out_sonic(11) = Uy_stdev
+Alias cov_out_sonic(12) = Uy_Uz_cov
+Alias cov_out_sonic(13) = Uz_stdev
+Alias cov_out_sonic(14) = wnd_spd
+Alias cov_out_sonic(15) = rslt_wnd_spd
+Alias cov_out_sonic(16) = wnd_dir_sonic
+Alias cov_out_sonic(17) = std_wnd_dir
+Alias cov_out_sonic(18) = wnd_dir_compass
+Units Hs = W/m^2
+Units tau = kg/(m s^2)
+Units u_star = m/s
+Units Ts_stdev = C
+Units Ts_Ux_cov = C m/s
+Units Ts_Uy_cov = C m/s
+Units Ts_Uz_cov = C m/s
+Units Ux_stdev = m/s
+Units Ux_Uy_cov = (m/s)^2
+Units Ux_Uz_cov = (m/s)^2
+Units Uy_stdev = m/s
+Units Uy_Uz_cov = (m/s)^2
+Units Uz_stdev = m/s
+Units wnd_spd = m/s
+Units rslt_wnd_spd = m/s
+Units wnd_dir_sonic = degrees
+Units std_wnd_dir = degrees
+Units wnd_dir_compass = degrees
+
+DataTable (delay_3d,TRUE,OFFSET)
+  Sample (5,sonic_irga_raw(1),IEEE4)
+EndTable
+
+DataTable (comp_cov_3d,TRUE,1)
+  DataInterval (0,OUTPUT_INTERVAL,Min,1)
+
+  'Compute covariances from CSAT3A sonic head data.
+  Covariance (4,cov_array_sonic(1,1),IEEE4,sonic_disable_f,10)
+  WindVector (1,Uy,Ux,IEEE4,sonic_disable_f,0,1,2)
+EndTable
+'*** End of CSAT3A sonic head constants, variables, and working data table ***
+
+
+'*** Beginning of EC150 constants, variables, and working data table ***
+Const DELAY_EC150 = INT (4000/SCAN_INTERVAL/BANDWIDTH) 'Automatically computed lag of the EC150 data.
+Const EC150_REC_BCK = OFFSET-DELAY_EC150 'Number of records back to align EC150 data.
+Const EC150_PWR_DN_TMPR = -30
+Const EC150_PWR_UP_TMPR = -25
+
+Public irga(9)
+Alias irga(1) = CO2
+Alias irga(2) = H2O
+Alias irga(3) = diag_irga
+Alias irga(4) = amb_tmpr
+Alias irga(5) = amb_press
+Alias irga(6) = CO2_sig_strgth
+Alias irga(7) = H2O_sig_strgth
+Alias irga(8) = Tc
+Alias irga(9) = Td
+
+Public diag_bits_irga(21) As Boolean        'Gas analyzer warning flags.
+Alias diag_bits_irga(1) = irga_bad_data_f   'EC150 bad data warning flag.
+Alias diag_bits_irga(2) = gen_sys_fault_f   'General system fault warning flag.
+Alias diag_bits_irga(3) = sys_startup_f     'EC150 starting up warning flag.
+Alias diag_bits_irga(4) = motor_spd_f       'EC150 motor speed out of bounds warning flag.
+Alias diag_bits_irga(5) = tec_tmpr_f        'Thermoelectric cooler temperature out of bounds warning flag.
+Alias diag_bits_irga(6) = src_pwr_f         'EC150 source power out of bounds warning flag.
+Alias diag_bits_irga(7) = src_tmpr_f        'EC150 source temperature out of bounds warning flag.
+Alias diag_bits_irga(8) = src_curr_f        'EC150 source current out of bounds warning flag.
+Alias diag_bits_irga(9) = irga_off_f        'Gas analyzer head is powered down.
+Alias diag_bits_irga(10) = irga_sync_f      'EC150 not synchronized with home pulse warning flag.
+Alias diag_bits_irga(11) = amb_tmpr_f       'Invalid ambient temperature warning flag.
+Alias diag_bits_irga(12) = amb_press_f      'Invalid ambient pressure warning flag.
+Alias diag_bits_irga(13) = CO2_I_f          'CO2 I out of bounds warning flag.
+Alias diag_bits_irga(14) = CO2_Io_f         'CO2 Io out of bounds warning flag.
+Alias diag_bits_irga(15) = H2O_I_f          'H2O I out of bounds warning flag.
+Alias diag_bits_irga(16) = H2O_Io_f         'H2O Io out of bounds warning flag.
+Alias diag_bits_irga(17) = CO2_Io_var_f     'CO2 Io moving variation out of bounds warning flag.
+Alias diag_bits_irga(18) = H2O_Io_var_f     'H2O Io moving variation out of bounds warning flag.
+Alias diag_bits_irga(19) = CO2_sig_strgth_f 'CO2 signal strength warning flag.
+Alias diag_bits_irga(20) = H2O_sig_strgth_f 'H2O signal strength warning flag.
+Alias diag_bits_irga(21) = irga_cal_err_f   'EC150 calibration data signature error.
+Units diag_bits_irga = arb
+
+Public Xc                                   'CO2 molar mixing ratio.
+Public Xv                                   'H2O molar mixing ratio.
+Dim divisor                                 'Temporary variable used to find molar mixing ratio.
+Dim diag_irga_tmp As Long                   'Temporary variable used to break out the EC150 diagnostic bits.
+Dim irga_disable_f As Boolean               'TRUE when EC150 sends bad data.
+Dim rho_d_mean                              'Density of dry air used in Webb et al. term [kg / m^3].
+Dim sigma_wpl                               'Webb et al. sigma = density of water vapor / density of dry air.
+Dim mask As Long
+Dim Td_tmp
+Units Xc = umol/mol
+Units Xv = mmol/mol
+
+Dim cov_array_cs(3,4)                       'Arrays used to hold the input data for the covariance instructions (EC150 and CSAT3A sonic head).
+Dim cov_out_cs(26)                          'EC150 statistics.
+Alias cov_out_cs(1) = Fc_wpl                'Carbon dioxide flux (EC150), with Webb et al. term.
+Alias cov_out_cs(2) = LE_wpl                'Latent heat flux (EC150), with Webb et al. term.
+Alias cov_out_cs(3) = Hc                    'Sensible heat flux using sonic temperature corrected for water vapor measured by the EC150.
+Alias cov_out_cs(4) = CO2_stdev
+Alias cov_out_cs(5) = CO2_Ux_cov
+Alias cov_out_cs(6) = CO2_Uy_cov
+Alias cov_out_cs(7) = CO2_Uz_cov
+Alias cov_out_cs(8) = H2O_stdev
+Alias cov_out_cs(9) = H2O_Ux_cov
+Alias cov_out_cs(10) = H2O_Uy_cov
+Alias cov_out_cs(11) = H2O_Uz_cov
+Alias cov_out_cs(12) = Tc_stdev
+Alias cov_out_cs(13) = Tc_Ux_cov
+Alias cov_out_cs(14) = Tc_Uy_cov
+Alias cov_out_cs(15) = Tc_Uz_cov
+Alias cov_out_cs(16) = CO2_mean
+Alias cov_out_cs(17) = H2O_mean
+Alias cov_out_cs(18) = amb_press_mean
+Alias cov_out_cs(19) = Tc_mean              'Sonic temperature corrected for humidity.
+Alias cov_out_cs(20) = rho_a_mean
+Alias cov_out_cs(21) = Fc_irga              'Carbon dioxide flux (EC150), without Webb et al. term.
+Alias cov_out_cs(22) = LE_irga              'Latent heat flux (EC150), without Webb et al. term.
+Alias cov_out_cs(23) = CO2_wpl_LE           'Carbon dioxide flux (EC150), Webb et al. term due to latent heat flux.
+Alias cov_out_cs(24) = CO2_wpl_H            'Carbon dioxide flux (EC150), Webb et al. term due to sensible heat flux.
+Alias cov_out_cs(25) = H2O_wpl_LE           'Latent heat flux (EC150), Webb et al. term due to latent heat flux.
+Alias cov_out_cs(26) = H2O_wpl_H            'Latent heat flux (EC150), Webb et al. term due to sensible heat flux.
+Units Fc_wpl = mg/(m^2 s)
+Units LE_wpl = W/m^2
+Units Hc = W/m^2
+Units CO2_stdev = mg/m^3
+Units CO2_Ux_cov = mg/(m^2 s)
+Units CO2_Uy_cov = mg/(m^2 s)
+Units CO2_Uz_cov = mg/(m^2 s)
+Units H2O_stdev = g/m^3
+Units H2O_Ux_cov = g/(m^2 s)
+Units H2O_Uy_cov = g/(m^2 s)
+Units H2O_Uz_cov = g/(m^2 s)
+Units Tc_stdev = C
+Units Tc_Ux_cov = C m/s
+Units Tc_Uy_cov = C m/s
+Units Tc_Uz_cov = C m/s
+Units CO2_mean = mg/m^3
+Units H2O_mean = g/m^3
+Units amb_press_mean = kPa
+Units Tc_mean = C
+Units rho_a_mean = kg/m^3
+Units Fc_irga = mg/(m^2 s)
+Units LE_irga = W/m^2
+Units CO2_wpl_LE = mg/(m^2 s)
+Units CO2_wpl_H = mg/(m^2 s)
+Units H2O_wpl_LE = W/m^2
+Units H2O_wpl_H = W/m^2
+
+
+
+
+'*** Beginning of SlowSequence constants, variables, and working data table ***
+
+
+'Insert additional SlowSequence variables here.
+
+
+Public soilheat_out_20cm, soilheat_in_20cm
+Public soiltemp_out_20cm, soiltemp_in_20cm
+Public period_out_20cm, period_in_20cm, Soilwtr_out_20cm, soilwtr_in_20cm
+
+Public soilwtr_pwr_flag As Boolean
+
+Public airT, RH
+
+'variables for CNR1
+Public CM3Up
+Public CM3Dn
+Public CG3Up
+Public CG3Dn
+Public CNR1TC
+Public CNR1TK
+Public NetRs
+Public NetRl
+Public Albedo
+Public UpTot
+Public DnTot
+Public NetTot
+Public CG3UpCo
+Public CG3DnCo
+
+Public PTemp_C
+
+Public CS65X_1(6)
+
+Alias CS65X_1(1)=VWC_1
+Alias CS65X_1(2)=EC_1
+Alias CS65X_1(3)=T_1
+Alias CS65X_1(4)=P_1
+Alias CS65X_1(5)=PA_1
+Alias CS65X_1(6)=VR_1
+
+Units PTemp_C=Deg C
+Units VWC_1=m^3/m^3
+Units EC_1=dS/m
+Units T_1=Deg C
+Units P_1=unitless
+Units PA_1=nSec
+Units VR_1=unitless
+
+DataTable (dat_30m,TRUE,-1)
+  DataInterval (0,30,min,100)
+  CardOut (0,500000)
+
+  Average (1,airT,IEEE4,False)
+  Average (1,RH,IEEE4,False)
+
+  Average (1,CM3Up,IEEE4,False)
+  Average (1,CM3Dn,IEEE4,False)
+  Average (1,CG3UpCo,IEEE4,False)
+  Average (1,CG3DnCo,IEEE4,False)
+
+  Average (1,NetRs,IEEE4,False)
+  Average (1,NetRl,IEEE4,False)
+  Average (1,Albedo,IEEE4,False)
+  Average (1,UpTot,IEEE4,False)
+
+  Average (1,DnTot,IEEE4,False)
+  Average (1,NetTot,IEEE4,False)
+  
+  Average (1,soiltemp_out_20cm,IEEE4,False)
+  Average (1,soiltemp_in_20cm,IEEE4,False)
+
+  Average (1,soilheat_out_20cm,IEEE4,False)
+  Average (1,soilheat_in_20cm,IEEE4,False)
+
+  Sample (1,Soilwtr_out_20cm,FP2)
+  Sample (1,soilwtr_in_20cm,FP2)
+
+  Sample (1,period_out_20cm,FP2)
+  Sample (1,period_in_20cm,FP2)
+  
+	Sample(1,VWC_1,FP2)
+	Sample(1,EC_1,FP2)
+	Sample(1,T_1,FP2)
+	Sample(1,P_1,FP2)
+	Sample(1,PA_1,FP2)
+	Sample(1,VR_1,FP2)
+
+EndTable
+
+'DataTable(dat_day,True,-1)
+'  DataInterval(0,1440,Min,10)
+'  Minimum(1,batt_volt,FP2,False,False)
+'
+'  Average(1,soilwtr_east,FP2,False)
+'  Maximum(1,soilwtr_east,FP2,False,False)
+'  Minimum(1,soilwtr_east,FP2,False,False)
+'
+'  Average(1,soilwtr_west,FP2,False)
+'  Maximum(1,soilwtr_west,FP2,False,False)
+'  Minimum(1,soilwtr_west,FP2,False,False)
+'
+'  Average(1,soiltemp_east,FP2,False)
+'  Maximum(1,soiltemp_east,FP2,False,False)
+'  Minimum(1,soiltemp_east,FP2,False,False)
+'
+'  Average(1,soiltemp_west,FP2,False)
+'  Maximum(1,soiltemp_west,FP2,False,False)
+'  Minimum(1,soiltemp_west,FP2,False,False)
+'
+'  Average(1,soilheat_east,FP2,False)
+'  Maximum(1,soilheat_east,FP2,False,False)
+'  Minimum(1,soilheat_east,FP2,False,False)
+'
+'  Average(1,soilheat_west,FP2,False)
+'  Maximum(1,soilheat_west,FP2,False,False)
+'  Minimum(1,soilheat_west,FP2,False,False)
+'
+'EndTable
+
+'*** End of SlowSequence constants, variables, and working data table ***
+
+
+
+DataTable (delay_cs,TRUE,OFFSET)
+  Sample (7,sonic_irga_raw(6),IEEE4)
+EndTable
+
+DataTable (comp_cov_cs,TRUE,1)
+  DataInterval (0,OUTPUT_INTERVAL,Min,1)
+
+  'Compute covariance of CO2 against sonic wind data.
+  Covariance (4,cov_array_cs(1,1),IEEE4,irga_disable_f,4)
+  'Compute covariance of H2O against sonic wind data.
+  Covariance (4,cov_array_cs(2,1),IEEE4,irga_disable_f,4)
+  'Compute covariance of Tc (computed fast response temperature) against sonic wind data.
+  Covariance (4,cov_array_cs(3,1),IEEE4,irga_disable_f,4)
+  Average (2,CO2,IEEE4,irga_disable_f)
+  Average (1,amb_press,IEEE4,amb_press_f)
+  Average (1,Tc,IEEE4,irga_disable_f)
+EndTable
+
+
+DisplayMenu ("System Control",TRUE)
+  MenuItem ("Sonic Azmth",sonic_azimuth)
+  SubMenu ("Change Press Source")
+    MenuItem ("Select Srce",press_source_array(1,2))
+  MenuPick (BB,EB)
+    MenuItem ("Set Source",set_press_source_f)
+  MenuPick (True)
+  EndSubMenu
+  SubMenu ("On Site Zero & Span")
+    SubMenu ("Span Concentrations")
+      MenuItem ("CO2",CO2_span_gas)
+      MenuItem ("Td",Td_span_gas)
+    EndSubMenu
+    MenuItem ("Do Zero",do_zero_f)
+  MenuPick (True)
+    MenuItem ("Do CO2 Span",do_CO2_span_f)
+  MenuPick (True)
+    MenuItem ("Do H2O Span",do_H2O_span_f)
+  MenuPick (True)
+    DisplayValue ("CO2 um/m dry",Xc)
+    DisplayValue ("H2O mm/m dry",Xv)
+    DisplayValue ("Td degrees C",Td)
+  EndSubMenu
+EndMenu
+'*** End of EC150 constants, variables, and working data table ***
+
+
+
+'*** Output data tables ***
+DataTable (flux,TRUE,FLUX_SIZE_CPU)
+  DataInterval (0,OUTPUT_INTERVAL,Min,10)
+  CardOut (0,500000)
+
+  '*** Beginning of CSAT3A sonic head output data ***
+  Sample (18,Hs,IEEE4)
+  Average (4,Ux,IEEE4,sonic_disable_f)
+  Sample (1,sonic_azimuth,IEEE4)
+  Totalize (1,n,IEEE4,sonic_disable_f)
+  FieldNames ("sonic_samples_Tot")
+  Totalize (1,n,IEEE4,diag_sonic<>-1)
+  FieldNames ("no_sonic_head_Tot")
+  Totalize (1,n,IEEE4,diag_sonic<>NAN)
+  FieldNames ("no_new_sonic_data_Tot")
+  Totalize (1,n,IEEE4,amp_l_f IMP (diag_sonic=NAN))
+  FieldNames ("amp_l_f_Tot")
+  Totalize (1,n,IEEE4,amp_h_f IMP (diag_sonic=NAN))
+  FieldNames ("amp_h_f_Tot")
+  Totalize (1,n,IEEE4,sig_lck_f IMP (diag_sonic=NAN))
+  FieldNames ("sig_lck_f_Tot")
+  Totalize (1,n,IEEE4,del_T_f IMP (diag_sonic=NAN))
+  FieldNames ("del_T_f_Tot")
+  Totalize (1,n,IEEE4,aq_sig_f IMP (diag_sonic=NAN))
+  FieldNames ("aq_sig_f_Tot")
+  Totalize (1,n,IEEE4,sonic_cal_err_f IMP (diag_sonic=NAN))
+  FieldNames ("sonic_cal_err_f_Tot")
+  '*** End of CSAT3A sonic head output data ***
+
+  '*** Beginning of EC150 output data ***
+  Sample (17,Fc_wpl,IEEE4)
+  Average (1,amb_tmpr,IEEE4,amb_tmpr_f)
+  Sample (9,amb_press_mean,IEEE4)
+  Totalize (1,n,IEEE4,irga_disable_f)
+  FieldNames ("irga_samples_Tot")
+  Totalize (1,n,IEEE4,diag_irga<>-1)
+  FieldNames ("no_irga_head_Tot")
+  Totalize (1,n,IEEE4,diag_irga<>NAN)
+  FieldNames ("no_new_irga_data_Tot")
+  Totalize (1,n,IEEE4,irga_bad_data_f IMP (diag_irga=NAN))
+  FieldNames ("irga_bad_data_f_Tot")
+  Totalize (1,n,IEEE4,gen_sys_fault_f IMP (diag_irga=NAN))
+  FieldNames ("gen_sys_fault_f_Tot")
+  Totalize (1,n,IEEE4,sys_startup_f IMP (diag_irga=NAN))
+  FieldNames ("sys_startup_f_Tot")
+  Totalize (1,n,IEEE4,motor_spd_f IMP (diag_irga=NAN))
+  FieldNames ("motor_spd_f_Tot")
+  Totalize (1,n,IEEE4,tec_tmpr_f IMP (diag_irga=NAN))
+  FieldNames ("tec_tmpr_f_Tot")
+  Totalize (1,n,IEEE4,src_pwr_f IMP (diag_irga=NAN))
+  FieldNames ("src_pwr_f_Tot")
+  Totalize (1,n,IEEE4,src_tmpr_f IMP (diag_irga=NAN))
+  FieldNames ("src_tmpr_f_Tot")
+  Totalize (1,n,IEEE4,src_curr_f IMP (diag_irga=NAN))
+  FieldNames ("src_curr_f_Tot")
+  Totalize (1,n,IEEE4,irga_off_f IMP (diag_irga=NAN))
+  FieldNames ("irga_off_f_Tot")
+  Totalize (1,n,IEEE4,irga_sync_f IMP (diag_irga=NAN))
+  FieldNames ("irga_sync_f_Tot")
+  Totalize (1,n,IEEE4,amb_tmpr_f IMP (diag_irga=NAN))
+  FieldNames ("amb_tmpr_f_Tot")
+  Totalize (1,n,IEEE4,amb_press_f IMP (diag_irga=NAN))
+  FieldNames ("amb_press_f_Tot")
+  Totalize (1,n,IEEE4,CO2_I_f IMP (diag_irga=NAN))
+  FieldNames ("CO2_I_f_Tot")
+  Totalize (1,n,IEEE4,CO2_Io_f IMP (diag_irga=NAN))
+  FieldNames ("CO2_Io_f_Tot")
+  Totalize (1,n,IEEE4,H2O_I_f IMP (diag_irga=NAN))
+  FieldNames ("H2O_I_f_Tot")
+  Totalize (1,n,IEEE4,H2O_Io_f IMP (diag_irga=NAN))
+  FieldNames ("H2O_Io_f_Tot")
+  Totalize (1,n,IEEE4,CO2_Io_var_f IMP (diag_irga=NAN))
+  FieldNames ("CO2_Io_var_f_Tot")
+  Totalize (1,n,IEEE4,H2O_Io_var_f IMP (diag_irga=NAN))
+  FieldNames ("H2O_Io_var_f_Tot")
+  Totalize (1,n,IEEE4,CO2_sig_strgth_f IMP (diag_irga=NAN))
+  FieldNames ("CO2_sig_strgth_f_Tot")
+  Totalize (1,n,IEEE4,H2O_sig_strgth_f IMP (diag_irga=NAN))
+  FieldNames ("H2O_sig_strgth_f_Tot")
+  Average (1,CO2_sig_strgth,IEEE4,irga_disable_f)
+  FieldNames ("CO2_sig_strgth_mean")
+  Average (1,H2O_sig_strgth,IEEE4,irga_disable_f)
+  FieldNames ("H2O_sig_strgth_mean")
+  '*** End of EC150 output data ***
+
+  '*** Beginning of other output data ***
+  Average (1,panel_tmpr,IEEE4,FALSE)
+  Average (1,batt_volt,IEEE4,slowsequence_disable_f)
+  '*** End of other output data ***
+
+  Totalize (1,n,IEEE4,slowsequence_disable_f)
+  FieldNames ("slowsequence_Tot")
+EndTable
+
+
+'Time series data.
+DataTable (ts_data,TRUE,-1)
+  DataInterval (0,SCAN_INTERVAL,mSec,100)
+  TableFile ("CRD:"&Status.SerialNumber(1,1)&".ts_data",64,-1,0,15,Day,0,0)
+'  CardOut (0,-1)
+
+
+  '*** Beginning of CSAT3(A) time series output ***
+  Sample (5,sonic_irga_raw(1),IEEE4)
+  FieldNames ("Ux,Uy,Uz,Ts,diag_sonic")
+  Units Ux = m/s
+  Units Uy = m/s
+  Units Uz = m/s
+  Units Ts = C
+  Units diag_sonic = arb
+  '*** End of CSAT3(A) time series output ***
+
+  '*** Beginning of EC150 time series output ***
+  Sample (7,sonic_irga_raw(6),IEEE4)
+  FieldNames ("CO2,H2O,diag_irga,amb_tmpr,amb_press,CO2_sig_strgth,H2O_sig_strgth")
+  Units CO2 = mg/m^3
+  Units H2O = g/m^3
+  Units diag_irga = arb
+  Units amb_tmpr = C
+  Units amb_press = kPa
+  Units CO2_sig_strgth = arb
+  Units H2O_sig_strgth = arb
+  '*** End of EC150 time series output ***
+EndTable
+
+
+
+'*** Program ***
+
+BeginProg
+  
+  sys_conf_var_file = FileOpen ("CPU:sys_conf_var.dat","rb",0) 'Check if a file exists.
+  FileClose (sys_conf_var_file)
+
+  If ( sys_conf_var_file = 0 ) Then
+    Calfile (sonic_azimuth,1,"CPU:sys_conf_var.dat",0) 'Store the default values to the file.
+  EndIf
+  Calfile (sonic_azimuth,1,"CPU:sys_conf_var.dat",1) 'Read the values from the file.
+  sonic_azimuth_prev = sonic_azimuth
+
+  'Set the SDM clock speed.
+  SDMSpeed (SDM_PER)
+  Scan (SCAN_INTERVAL,mSec,SCAN_BUFFER_SIZE,0)
+    
+    GPS (latitude_a,Com2,LOCAL_TIME_OFFSET*3600,0,nmea_sentence(1))
+
+    'Datalogger panel temperature.
+    PanelTemp (panel_tmpr,250)
+
+
+    '*** Beginning of EC150 w/ CSAT3A sonic head measurements ***
+    'Get EC150 w/ CSAT3A sonic head data.
+
+    EC100 (sonic_irga_raw(1),EC100_SDM_ADDR,1)
+    CSAT3 (sonic_irga_raw(1),1,3,91,10)
+    If 0 <= sonic_irga_raw(5) AND sonic_irga_raw(5) <= 70 Then sonic_irga_raw(5) = 0   '!!!!!!
+    
+    If ( sonic_irga_raw(8) = NAN ) Then 'The EC150 diagnostic word (diag_irga) is sonic_irga_raw(8).
+      NAN_cnt = NAN_cnt+1
+      configure_ec100_f = FALSE
+    Else
+      If ( NAN_cnt > 4 ) Then ( configure_ec100_f = TRUE )
+      NAN_cnt = 0
+    EndIf
+
+    If ( configure_ec100_f ) Then
+      Call Config (config_array(1,1),3,configure_ec100_f)
+    ElseIf ( ec150_power_f ) Then
+      Call Config (power_array(1,1),1,ec150_power_f)
+    ElseIf ( set_press_source_f ) Then
+      Call Config (press_source_array(1,1),1,set_press_source_f)
+      If ( NOT (set_press_source_f) ) Then ( EC100Configure (config_result,EC100_SDM_ADDR,99,2718) )
+    ElseIf ( do_zero_f ) Then
+      Call Config (zero_array(1,1),1,do_zero_f)
+    ElseIf ( do_CO2_span_f ) Then
+      span_CO2_array(1,2) = CO2_span_gas
+      Call Config (span_CO2_array(1,1),2,do_CO2_span_f)
+    ElseIf ( do_H2O_span_f )
+      span_H2O_array(1,2) = Td_span_gas
+      Call Config (span_H2O_array(1,1),2,do_H2O_span_f)
+    EndIf
+
+    CallTable delay_3d
+    CallTable delay_cs
+    '*** End of EC150 w/ CSAT3A sonic head measurements ***
+
+
+    'Save time series data.
+    CallTable ts_data
+
+
+    If ( scan_count >= OFFSET ) Then
+      '*** Beginning of CSAT3A sonic head processing ***
+      'Load in CSAT3A sonic head data that has been lagged by EC150_REC_BCK scans.
+      GetRecord (dly_data_out(1),delay_3d,EC150_REC_BCK)
+
+      Move (Ux,5,dly_data_out(1),5) 'Ux, Uy, Uz, Ts, diag_sonic
+
+      'Extract the six warning flags from the sonic diagnostic word.
+      If ( (diag_sonic <> NAN) AND (diag_sonic <> -1) ) Then ( diag_sonic_tmp = diag_sonic ) Else ( diag_sonic_tmp = &h3f)
+      mask = &h1
+      For i = 1 To 6
+        diag_bits_sonic(i) = diag_sonic_tmp AND mask
+        mask = mask*2
+      Next i
+
+      'Turn on the intermediate processing disable flag when any CSAT3A sonic head
+      'warning flag is high.
+      sonic_disable_f = diag_sonic_tmp AND &h3f
+
+      Ts_absolute = Ts+273.15
+
+      'Load the arrays that hold the input data for the covariance instructions.
+      cov_array_sonic(1,1) = Ts
+      Move (cov_array_sonic(1,2),3,Ux,3)
+      CallTable comp_cov_3d
+      If ( comp_cov_3d.Output(1,1) ) Then
+        GetRecord (Ts_stdev,comp_cov_3d,1)
+
+        'Rotate the CSAT3A sonic head RHC system so the negative x-axis points north.
+        wnd_dir_compass = (360+sonic_azimuth-wnd_dir_sonic) MOD 360
+
+        'Make the CSAT3A sonic head wind direction fall between 0 to 180 degrees and 0 to -180 degrees.
+        If ( wnd_dir_sonic > 180 ) Then ( wnd_dir_sonic = wnd_dir_sonic-360 )
+
+        'Compute online fluxes.
+        tau = SQR ((Ux_Uz_cov*Ux_Uz_cov)+(Uy_Uz_cov*Uy_Uz_cov))
+        u_star = SQR (tau)
+
+        'Compute the standard deviation from the variance.
+        Ts_stdev = SQR (Ts_stdev)
+        Ux_stdev = SQR (Ux_stdev)
+        Uy_stdev = SQR (Uy_stdev)
+        Uz_stdev = SQR (Uz_stdev)
+      EndIf
+      '*** End of CSAT3A sonic head processing ***
+
+
+      '*** Beginning of EC150 processing ***
+      'Load in the EC150 data that has been lagged by EC150_REC_BCK scans.
+      GetRecord (dly_data_out(1),delay_cs,EC150_REC_BCK)
+
+      Move (CO2,7,dly_data_out(1),7) 'CO2, H2O, diag_irga, amb_tmpr, amb_press, CO2_sig_strgth, H2O_sig_strgth
+
+      'Compute the EC150 dew point temperature from the H2O density at atmospheric pressure and shroud temperature.
+      Td_tmp = LOG (H2O*R*(amb_tmpr+273.15)/(11.0178*(1.00072+3.2e-5*amb_press+5.9e-9*amb_press*amb_tmpr*amb_tmpr))) 'Td_tmp = ln (H2O*R*(T+273.15)/(Mv*0.61121*f)); Mv = 18 g/mol, f = 1.00072+3.2e-5*P+5.9e-9*P*T*T
+      Td = (240.97*Td_tmp)/(17.502-Td_tmp) 'Buck (1981) Eq. (2a, 3a, & 6) and Leuning (2004) Eq. (6.23)
+
+      'Extract the twenty one flags from the gas analyzer diagnostic word.
+      If ( (diag_irga <> NAN) AND (diag_irga <> -1) ) Then ( diag_irga_tmp = diag_irga ) Else ( diag_irga_tmp = &h1fffff)
+      mask = &h1
+      For i = 1 To 21
+        diag_bits_irga(i) = diag_irga_tmp AND mask
+        mask = mask*2
+      Next i
+
+      If ( (amb_tmpr < EC150_PWR_DN_TMPR) AND (NOT (irga_off_f)) AND (diag_irga <> NAN) AND (diag_irga <> -1) ) Then
+        ec150_power_f = TRUE
+        power_array(1,2) = 1 'Turn off gas head.
+      ElseIf ( (amb_tmpr > EC150_PWR_UP_TMPR) AND (irga_off_f) AND (diag_irga <> NAN) AND (diag_irga <> -1) ) Then
+        ec150_power_f = TRUE
+        power_array(1,2) = 0 'Turn on gas head.
+      EndIf
+
+      'Compute fast response air temperature from sonic temperature and EC150 vapor density.
+      Tc = Ts_absolute/(1+0.32*H2O*R*Ts_absolute/(amb_press*18)) 'Kaimal and Gaynor (1991) Eq. (3).
+
+      'Compute the molar mixing ratio of CO2 and H2O.
+      divisor = (amb_press/(R*(Tc)))-(H2O/18)
+      Xc = CO2/(0.044*divisor)
+      Xv = H2O/(0.018*divisor)
+
+      'Convert the fast response air temperature to degrees C.
+      Tc = Tc-273.15
+
+      'Filter data in the covariance instruction if the EC150 w/ CSAT3A sonic head reports bad data.
+      irga_disable_f = sonic_disable_f OR irga_bad_data_f
+
+      'Load the arrays that hold the input data for the covariance instructions.
+      cov_array_cs(1,1) = CO2
+      Move (cov_array_cs(1,2),3,Ux,3)
+      cov_array_cs(2,1) = H2O
+      Move (cov_array_cs(2,2),3,Ux,3)
+      cov_array_cs(3,1) = Tc
+      Move (cov_array_cs(3,2),3,Ux,3)
+      CallTable comp_cov_cs
+      If ( comp_cov_cs.Output(1,1) ) Then
+        GetRecord (CO2_stdev,comp_cov_cs,1)
+
+        rho_d_mean = (amb_press_mean/((Tc_mean+273.15)*RD))-(H2O_mean*MU_WPL)
+        rho_a_mean = (rho_d_mean+H2O_mean)/1000
+
+        'Compute online fluxes.
+        Fc_irga = CO2_Uz_cov
+        LE_irga = LV*H2O_Uz_cov
+
+        'Compute the standard deviation from the variance.
+        CO2_stdev = SQR (CO2_stdev)
+        H2O_stdev = SQR (H2O_stdev)
+        Tc_stdev = SQR (Tc_stdev)
+
+        sigma_wpl = H2O_mean/rho_d_mean
+
+        'EC150 Webb et al. (1980) term for carbon dioxide Eq. (24).
+        CO2_wpl_LE = MU_WPL*CO2_mean/rho_d_mean*H2O_Uz_cov
+        CO2_wpl_H = (1+(MU_WPL*sigma_wpl))*CO2_mean/(Tc_mean+273.15)*Tc_Uz_cov
+        Fc_wpl = Fc_irga+CO2_wpl_LE+CO2_wpl_H
+
+        'EC150 Webb et al. (1980) term for water vapor Eq. (25).
+        H2O_wpl_LE = MU_WPL*sigma_wpl*LE_irga
+        H2O_wpl_H = (1+(MU_WPL*sigma_wpl))*H2O_mean/(Tc_mean+273.15)*LV*Tc_Uz_cov
+        LE_wpl = LE_irga+H2O_wpl_LE+H2O_wpl_H
+      EndIf
+      '*** End of EC150 processing ***
+
+
+      '*** Beginning of sonic sensible heat, momentum, and sensible heat flux processing ***
+      If ( comp_cov_3d.Output(1,1) ) Then
+        'CSAT3(A) sensible heat flux using sonic temperature.
+        Hs = rho_a_mean*CP*Ts_Uz_cov               'Air density computed from EC150.
+
+        'CSAT3(A) momentum flux.
+        tau = rho_a_mean*tau                       'Air density computed from EC150.
+
+        'Sensible heat flux using sonic temperature corrected for water vapor measured by the EC150.
+        Hc = rho_a_mean*CP*Tc_Uz_cov               'Air density computed from EC150.
+      EndIf
+      '*** End of sensible heat flux processing ***
+
+
+      CallTable flux
+
+
+      slowsequence_disable_f = TRUE
+      If ( slowsequence_finished_f ) Then
+        slowsequence_finished_f = FALSE
+        slowsequence_disable_f = FALSE
+      EndIf
+    Else
+      scan_count = scan_count+1
+    EndIf
+
+    'HMP155 (constant power) Temperature & Relative Humidity Sensor measurements 'AirTC' and 'RH'
+    VoltSe(airT,1,mV1000,27,0,0,250,0.14,-80)
+    VoltSe(RH,1,mV1000,28,0,0,250,0.1,0)
+    If RH>100 AND RH<108 Then RH=100
+
+
+
+
+    SW12(1,1)
+
+    'to control CS616s measurement to save DC current
+    If IfTime (29,30,Min) Then
+      soilwtr_pwr_flag = true
+
+    EndIf
+
+    If IfTime (1,30,min) Then
+      soilwtr_pwr_flag = false
+
+    EndIf
+
+    If soilwtr_pwr_flag = true Then
+      SW12 (2,1 )
+
+    Else
+      SW12 (2,0 )
+    EndIf
+
+    'additional two CS616 Water Content Reflectometer measurements
+    CS616(period_out_20cm,1,19,7,1,1.0,0)
+    CS616(period_in_20cm,1,20,8,1,1.0,0)
+
+    Soilwtr_out_20cm =-0.0663+(-0.0063*period_out_20cm)+(0.0007*period_out_20cm^2)
+    soilwtr_in_20cm =-0.0663+(-0.0063*period_in_20cm)+(0.0007*period_in_20cm^2)
+
+    CallTable(dat_30m)
+
+  NextScan
+
+
+  SlowSequence
+
+  Scan (1,Sec,10,0)
+    'Measure battery voltage.
+    Battery (batt_volt)
+
+
+    'Update file if sonic azimuth has changed.
+    If ( sonic_azimuth_prev <> sonic_azimuth ) Then
+      sonic_azimuth_prev = sonic_azimuth
+      Calfile (sonic_azimuth,1,"CPU:sys_conf_var.dat",0)  'Store the new value to the file.
+    EndIf
+
+    'CNR4 Net Radiometer measurements CM3Up, CM3Dn, CG3Up, CG3Dn, CNR1TC, CNR1TK,
+    'NetRs, NetRl, Albedo, UpTot, DnTot, NetTot, CG3UpCo, and CG3DnCo
+    ' CM3Up : 14.47 -> 69.10850
+    ' CM3Dn : 14.13 -> 70.77140
+    ' CG3Up : 12.17 -> 82.16926
+    ' CG3Dn : 12.80 -> 78.125
+
+    VoltDiff(CM3Up,1,mV20,1,True,0,250,69.10850,0)  '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    VoltDiff(CM3Dn,1,mV20,2,True,0,250,70.77140,0)
+    VoltDiff(CG3Up,1,mV20,3,True,0,250,82.16926,0)
+    VoltDiff(CG3Dn,1,mV20,4,True,0,250,78.125,0)
+
+    Resistance(CNR1TC,1,mV200,5,Ix1,1,1675,True,True,200,250,1.0,0)
+    '    BrHalf4W(CNR1TC,1,mV50,mV50,5,Vx3,1,4200,True,True,0,_60Hz,78.4929,0)
+    CNR1TC=CNR1TC/100
+    PRT(CNR1TC,1,CNR1TC,1,0)
+
+
+    CNR1TK=CNR1TC+273.18
+    NetRs=CM3Up-CM3Dn
+    NetRl=CG3Up-CG3Dn
+    Albedo=CM3Dn/CM3Up
+    UpTot=CM3Up+CG3Up
+    DnTot=CM3Dn+CG3Dn
+    NetTot=UpTot-DnTot
+    CG3UpCo=CG3Up+5.67*10^-8*CNR1TK^4
+    CG3DnCo=CG3Dn+5.67*10^-8*CNR1TK^4
+
+
+    'Measure averaging soil temperature
+    PanelTemp (PTemp_C,250)
+    
+    '**************************
+    TCDiff(soiltemp_out_20cm,1,mV20,6,TypeE,PTemp_C,True,0,250,1,0)
+    TCDiff(soiltemp_in_20cm,1,mV20,7,TypeE,PTemp_C,True,0,250,1,0)
+
+' 5cm 8950 : 62.51
+'20cm 8887 : 62.06
+    VoltDiff (soilheat_out_20cm,1,mV20,8,True,0,250,15.9974,0)    
+    VoltDiff (soilheat_in_20cm,1,mV20,9,True,0,250,16.1134,0)    
+
+
+
+    If IfTime (0,30,min) Then
+        '**********************************
+		'CS650/655 Water Content Reflectometer measurements 'VWC_1', 'EC_1', and 'T_1'
+		SDI12Recorder(CS65X_1(),1,"8","M3!",1,0)
+
+    EndIf
+
+    slowsequence_finished_f = TRUE
+  NextScan
+
+
+EndProg
+
+
