@@ -1,0 +1,92 @@
+    [a b]=size(data);
+
+    for i = 1:a
+        Ui = data(:,1);
+        WDi = data(:,2);
+        ustari = data(:,3);
+        Tsi = data(:,4);
+        CO2i = data(:,5);
+        H2Oi = data(:,6);
+        covwTsi = data(:,7);
+        Qhi = data(:,8);
+        Qei = data(:,9);
+        Fci = data(:,10);
+        Kdni = data(:,11);
+        Kupi = data(:,12);
+        Ldni = data(:,13);
+        Lupi = data(:,14);
+        Qstari = data(:,15);
+    end
+    clear i
+
+    size_time = a;
+    ncid = netcdf.create('BS60m.nc','NC_WRITE');
+
+    time = netcdf.defDim(ncid,'time',size_time);
+    
+    idtime = netcdf.defVAR(ncid,'time','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idtime,'units','yyyyMMddhhmm');
+    idU = netcdf.defVAR(ncid,'U','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idU,'units','m s-1');
+    netcdf.putAtt(ncid,idU,'description','mean wind speed');
+    idWD = netcdf.defVAR(ncid,'WD','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idWD,'units','degree');
+    netcdf.putAtt(ncid,idWD,'description','vector mean wind direction');
+    idustar = netcdf.defVAR(ncid,'ustar','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idustar,'units','m s-1');
+    netcdf.putAtt(ncid,idustar,'description','friction velocity');
+    idTs = netcdf.defVAR(ncid,'Ts','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idTs,'units','degreeC');
+    netcdf.putAtt(ncid,idTs,'description','sonic temperature');
+    idCO2 = netcdf.defVAR(ncid,'CO2','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idCO2,'units','ppm');
+    netcdf.putAtt(ncid,idCO2,'description','concentration of carbon dioxide');
+    idH2O = netcdf.defVAR(ncid,'H2O','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idH2O,'units','ppt');
+    netcdf.putAtt(ncid,idH2O,'description','concentration of water vapor');
+    idcovwTs = netcdf.defVAR(ncid,'covwTs','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idcovwTs,'units','degreeC m s-1');
+    netcdf.putAtt(ncid,idcovwTs,'description','kinematic sensible heat flux');
+    idQh = netcdf.defVAR(ncid,'Qh','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idQh,'units','W m-2');
+    netcdf.putAtt(ncid,idQh,'description','sensible heat flux');
+    idQe = netcdf.defVAR(ncid,'Qe','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idQe,'units','W m-2');
+    netcdf.putAtt(ncid,idQe,'description','latent heat flux');
+    idFc = netcdf.defVAR(ncid,'Fc','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idFc,'units','umol m-2 s-1');
+    netcdf.putAtt(ncid,idFc,'description','vertical flux of carbondioxide');
+    idKdn = netcdf.defVAR(ncid,'Kdn','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idKdn,'units','W m-2');
+    netcdf.putAtt(ncid,idKdn,'description','downward shortwave radiation');
+    idKup = netcdf.defVAR(ncid,'Kup','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idKup,'units','W m-2');
+    netcdf.putAtt(ncid,idKup,'description','upward shortwave radiation');
+    idLdn = netcdf.defVAR(ncid,'Ldn','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idLdn,'units','W m-2');
+    netcdf.putAtt(ncid,idLdn,'description','downward longwave radiation');
+    idLup = netcdf.defVAR(ncid,'Lup','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idLup,'units','W m-2');
+    netcdf.putAtt(ncid,idLup,'description','upward longwave radiation');
+    idQstar = netcdf.defVAR(ncid,'Qstar','NC_FLOAT',[time]);
+    netcdf.putAtt(ncid,idQstar,'units','W m-2');
+    netcdf.putAtt(ncid,idQstar,'description','net radiation');
+    netcdf.endDef(ncid);
+
+    netcdf.putVar(ncid,idtime,timei);
+    netcdf.putVar(ncid,idU,Ui);
+    netcdf.putVar(ncid,idWD,WDi);
+    netcdf.putVar(ncid,idustar,ustari);
+    netcdf.putVar(ncid,idTs,Tsi);
+    netcdf.putVar(ncid,idCO2,CO2i);
+    netcdf.putVar(ncid,idH2O,H2Oi);
+    netcdf.putVar(ncid,idcovwTs,covwTsi);
+    netcdf.putVar(ncid,idQh,Qhi);
+    netcdf.putVar(ncid,idQe,Qei);
+    netcdf.putVar(ncid,idFc,Fci);
+    netcdf.putVar(ncid,idKdn,Kdni);
+    netcdf.putVar(ncid,idKup,Kupi);
+    netcdf.putVar(ncid,idLdn,Ldni);
+    netcdf.putVar(ncid,idLup,Lupi);
+    netcdf.putVar(ncid,idQstar,Qstari);
+    netcdf.close(ncid);
